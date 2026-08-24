@@ -1,0 +1,13 @@
+{
+  "name": "js-construction-sales-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live sales dashboard for JS Construction, backed by the GoHighLevel API. Deploys as a Cloudflare Pages project (static index.html + a Pages Function at functions/api/data.js).",
+  "scripts": {
+    "dev": "wrangler pages dev ."
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
