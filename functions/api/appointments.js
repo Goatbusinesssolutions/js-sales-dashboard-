@@ -1,4 +1,5 @@
-// Cloudflare Pages Function — reachable at /api/appointments.
+// Handler for /api/appointments — called from worker/index.js, the actual
+// Cloudflare Worker entry point (see wrangler.jsonc).
 //
 // Separate from /api/data (the dollar-totals dashboard) on purpose: this
 // endpoint is far more expensive to compute (see the budget note below), so

@@ -1,5 +1,7 @@
-// Cloudflare Pages Function — reachable at /api/data (the folder path under
-// /functions maps directly to the URL path; see README.md).
+// Handler for /api/data — called from worker/index.js, which is the actual
+// Cloudflare Worker entry point (see wrangler.jsonc). Kept as a standalone
+// onRequestGet(context) function (rather than folded directly into the
+// router) so it stays a plain, easily-tested unit on its own.
 //
 // Runs on Cloudflare's Workers runtime, not Node.js: env vars come from
 // context.env (never process.env), and the response is a standard Web

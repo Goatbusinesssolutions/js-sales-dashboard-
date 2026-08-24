@@ -1,0 +1,27 @@
+{
+  // Cloudflare has deprecated Pages for new projects in favor of a single
+  // "Workers" product with a static-assets binding — this file is what
+  // Cloudflare's dashboard "Deploy command" (npx wrangler deploy) reads to
+  // know what to deploy. See README.md's "One-time setup" for the full
+  // walkthrough and why the project is laid out this way.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "js-sales-dashboard",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-24",
+
+  // Everything under public/ is served as a static file automatically
+  // (index.html at "/", public/lib/appointments.js at "/lib/appointments.js",
+  // etc.) — Cloudflare's build tooling (which installs into node_modules at
+  // the repo root while it prepares the deploy) never gets swept into this,
+  // since node_modules isn't inside public/.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // Only /api/* actually needs to run worker/index.js first; every other
+    // request (the page itself, its one JS file) is served straight from
+    // public/ without going through the Worker at all — faster, and it
+    // keeps worker/index.js's job simple: route /api/*, otherwise get out
+    // of the way.
+    "run_worker_first": ["/api/*"]
+  }
+}
