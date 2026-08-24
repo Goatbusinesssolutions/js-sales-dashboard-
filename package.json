@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Live sales dashboard for JS Construction, backed by the GoHighLevel API. Deploys as a Cloudflare Pages project (static index.html + a Pages Function at functions/api/data.js).",
+  "description": "Live sales dashboard for JS Construction, backed by the GoHighLevel API. Deploys as a Cloudflare Pages project (static public/index.html + Pages Functions at functions/api/*.js).",
   "scripts": {
-    "dev": "wrangler pages dev ."
+    "build": "mkdir -p public/lib && cp lib/appointments.js public/lib/appointments.js",
+    "dev": "npm run build && wrangler pages dev public"
   },
   "engines": {
     "node": ">=18"
