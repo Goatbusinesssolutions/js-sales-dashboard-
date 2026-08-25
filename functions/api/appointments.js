@@ -169,23 +169,32 @@ export async function onRequestGet(context) {
   const { env, ctx } = context;
   const cache = caches.default;
 
-  // Edge cache check FIRST, before touching GOAT at all — see the matching
-  // comment in functions/api/data.js's onRequestGet. This is the endpoint
-  // that benefits most: a cache miss here is ~90-120 GOAT API calls, so
-  // actually caching the result (instead of only setting a Cache-Control
-  // header the browser saw but Cloudflare's own edge never acted on) is
-  // most of the "why is this slow / why does it sometimes error" fix.
-  const cached = await cache.match(CACHE_KEY);
-  if (cached) return cached;
-
   try {
+    // Edge cache check FIRST, before touching GOAT at all — see the
+    // matching comment in functions/api/data.js's onRequestGet. This is
+    // the endpoint that benefits most: a cache miss here is ~90-120 GOAT
+    // API calls, so actually caching the result (instead of only setting a
+    // Cache-Control header the browser saw but Cloudflare's own edge never
+    // acted on) is most of the "why is this slow / why does it sometimes
+    // error" fix. Deliberately inside this try/catch, not before it — a
+    // Cache API failure must fall back to a live pull, not crash the whole
+    // request.
+    const cached = await cache.match(CACHE_KEY);
+    if (cached) return cached;
+
     const result = await loadAppointments(env);
     // Only a successful pull is worth caching; a transient failure should
     // let the very next request try again rather than serving (or
     // extending) an error for a full 2 minutes.
     const response = json(result.body, result.status, result.status === 200 ? 120 : undefined);
     if (result.status === 200) {
-      ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
+      // A cache.put failure must not fail the response itself — see the
+      // matching comment in functions/api/data.js.
+      try {
+        ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
+      } catch (cacheErr) {
+        // ignore — see comment above
+      }
     }
     return response;
   } catch (err) {
