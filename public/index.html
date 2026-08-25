@@ -401,8 +401,21 @@
   .appt-mode-badge.full { background: var(--series-track); color: var(--series-accent); }
   .appt-mode-badge.modified { background: rgba(208,59,59,0.10); color: var(--critical-text); }
   .appt-range-label { font-size: 11.5px; color: var(--text-muted); margin-bottom: 4px; }
+  /* summary row — the 5 headline metrics (Total/Opportunities/Demos/Sales/
+     Unresulted), each clickable to drill into the appointments/contacts
+     making up that number. Sits above the detailed 7-bucket breakdown. */
+  .appt-summary-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--gridline); border-radius: 10px; overflow: hidden; }
+  .appt-summary-tile { background: var(--surface-1); padding: 14px 10px; text-align: center; cursor: pointer; transition: background 0.15s; }
+  .appt-summary-tile:hover { background: var(--surface-page); }
+  .appt-summary-label { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 7px; }
+  .appt-summary-value { font-size: 22px; font-weight: 750; color: var(--text-primary); letter-spacing: -0.01em; }
+  .appt-summary-pct { font-size: 10.5px; color: var(--series-accent); font-weight: 700; margin-top: 4px; line-height: 1.35; }
+  .appt-summary-hint { font-size: 9px; color: var(--text-muted); margin-top: 5px; }
+  @media (max-width: 640px) { .appt-summary-row { grid-template-columns: repeat(2, 1fr); } }
+
   .appt-counts-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--gridline); margin-top: 14px; border-radius: 10px; overflow: hidden; }
-  .appt-count-tile { background: var(--surface-1); padding: 12px 8px; text-align: center; }
+  .appt-count-tile { background: var(--surface-1); padding: 12px 8px; text-align: center; cursor: pointer; transition: background 0.15s; }
+  .appt-count-tile:hover { background: var(--surface-page); }
   .appt-count-label { font-size: 9px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
   .appt-count-value { font-size: 19px; font-weight: 700; color: var(--text-primary); }
   .appt-rates-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
@@ -471,6 +484,8 @@
       <label for="periodPicker" class="period-bar-label">Viewing</label>
       <select id="periodPicker" class="period-picker">
         <option value="current" selected>Current — live</option>
+        <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
         <option value="thisWeek">This week</option>
         <option value="lastWeek">Last week</option>
         <option value="thisMonth">This month</option>
@@ -727,13 +742,21 @@
       </div>
       <div class="appt-range-label" id="apptRangeLabel">—</div>
 
+      <div class="appt-summary-row" id="apptSummaryRow"></div>
+      <div class="footnote" style="margin-top:10px;">Click any number above — or in the detailed breakdown below — to see exactly which appointments/contacts it's made of, each linking straight to the contact in GOAT. Total appointments = every resulted outcome plus Unresulted, for this range.</div>
+
       <div class="appt-counts-row" id="apptCountsRow"></div>
       <div class="appt-rates-row" id="apptRatesRow"></div>
       <div class="appt-note" id="apptDollarNote" style="font-weight:600;">$ Sold here is counted by <u>Won Date</u> — the same date basis as the Daily Sales Dashboard at the top of the page — so the totals for any matching date range agree exactly. Demo/DNS/No Show/Inc. Time/NI/NQ still reflect the estimate appointment itself, so a deal quoted on one day and won on a later one shows its estimate outcome on the appointment's date and its sale on the day it actually won; a deal that closed with no matching appointment at all still counts as a sale (and a demo, for the rate math) on the day it won.</div>
       <div class="appt-note" id="apptNote">Loading appointment outcomes…</div>
 
-      <button class="hist-back-btn" id="apptUnresultedToggle" style="display:none;margin-top:12px;">Show unresulted list</button>
-      <div id="apptUnresultedList" style="display:none;margin-top:12px;"></div>
+      <div id="apptDrilldownPanel" style="display:none;margin-top:14px;">
+        <div class="lb-head" style="margin-bottom:8px;">
+          <div class="section-label" style="margin-bottom:0;" id="apptDrilldownTitle">—</div>
+          <button class="hist-back-btn" id="apptDrilldownClose">Close</button>
+        </div>
+        <div id="apptDrilldownList"></div>
+      </div>
 
       <div style="margin-top:20px;">
         <div class="lb-head" style="margin-bottom:10px;">
@@ -1296,6 +1319,8 @@
     if (!latestData) return null;
     const today = latestData.today.date; // 'YYYY-MM-DD', already computed server-side in the dashboard's TZ
     switch (preset) {
+      case 'today': return [today, today];
+      case 'yesterday': { const y = addDaysStr(today, -1); return [y, y]; }
       case 'thisWeek': return [startOfWeekSun(today), today];
       case 'lastWeek': { const s = addDaysStr(startOfWeekSun(today), -7); return [s, addDaysStr(s, 6)]; }
       case 'thisMonth': return [startOfMonthStr(today), today];
@@ -1447,6 +1472,7 @@
   }
 
   const PERIOD_PRESET_LABELS = {
+    today: 'Today', yesterday: 'Yesterday',
     thisWeek: 'This week', lastWeek: 'Last week',
     thisMonth: 'This month', lastMonth: 'Last month',
     thisYear: 'This year', custom: 'Custom range',
@@ -1700,7 +1726,7 @@
 
   // ---- appointment outcomes section ----
 
-  let apptData = null; // { asOf, tz, fixDate, calendarId, locationId, historyStart, daily, reps }
+  let apptData = null; // { asOf, tz, fixDate, calendarId, locationId, historyStart, daily, events, sold, reps }
 
   function todayStrInTZ(tz) {
     return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -1768,12 +1794,15 @@
     badge.textContent = mode === 'full' ? 'Full mode' : 'Modified mode (pre-fix data)';
     badge.className = 'appt-mode-badge ' + mode;
 
+    renderSummaryRow(buildSummary(counts, mode), start, end);
+
     const countsRow = document.getElementById('apptCountsRow');
     countsRow.innerHTML = '';
     for (const key of ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted']) {
       const tile = document.createElement('div');
       tile.className = 'appt-count-tile';
       tile.innerHTML = `<div class="appt-count-label">${APPT_BUCKET_LABELS[key]}</div><div class="appt-count-value">${counts[key] || 0}</div>`;
+      tile.addEventListener('click', () => toggleDrilldown(key, APPT_BUCKET_LABELS[key], start, end));
       countsRow.appendChild(tile);
     }
 
@@ -1797,7 +1826,7 @@
       ? `Every appointment in this range was resulted after the ${apptData.fixDate} automation fix, so Not Interested / Not Qualified counts are trusted. Unresulted (${counts.Unresulted || 0}) = showed appointments with no usable status yet — excluded from the rates above.`
       : `This range includes dates before the ${apptData.fixDate} fix, when Not Interested / Not Qualified tagging could delete the opportunity instead of changing its status — those two counts (and the rates above) are best-effort only. Unresulted (${counts.Unresulted || 0}) = showed appointments with no usable status — excluded from the rates above.`;
 
-    renderUnresultedList(start, end);
+    refreshOpenDrilldown(start, end);
 
     const repRowsEl = document.getElementById('apptRepRows');
     repRowsEl.innerHTML = '';
@@ -1859,8 +1888,152 @@
     });
   }
 
-  // ---- Unresulted drill-down: which specific appointments need a status, and who's assigned ----
-  let unresultedListOpen = false;
+  // ---- Summary metrics + drill-down: click any number to see exactly what
+  // it's made of, with a link straight to the contact in GOAT ----
+
+  // Maps a clickable metric key to which raw classification bucket(s) make
+  // it up. The 7 raw buckets map to themselves; the 5 headline metrics in
+  // the summary row are unions of those buckets, mirroring the exact same
+  // formulas lib/appointments.js's computeRates uses (see its big comment
+  // block) so a metric's drill-down list always has exactly as many rows
+  // as the count shown next to it.
+  const APPT_METRIC_BUCKETS = {
+    Total: ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted'],
+    Opportunities: ['Sold', 'DNS', 'IncTime', 'NI'],
+    Demos: ['Sold', 'DNS'],
+    Sales: ['Sold'],
+    Unresulted: ['Unresulted'],
+  };
+
+  // Summary row = Total / Opportunities / Demos / Sales / Unresulted, per
+  // the "How You're Measured" formulas in lib/appointments.js's
+  // computeRates. Built from the same `counts` sumRange() already
+  // produced for the detailed 7-bucket row and the Opp/Demo/Close rate
+  // tiles below, so all three sections of this UI always agree with each
+  // other by construction, not by coincidence.
+  //
+  // Opportunities % and Demos % are only meaningful in 'full' mode — same
+  // restriction computeRates applies to oppRate/demoToOppRate, for the
+  // same reason (NI/NQ counts are unreliable pre-fix-date). Sales' %
+  // (closing rate = Sold / estimates sent) uses the same formula in both
+  // modes, so it's always shown.
+  function buildSummary(counts, mode) {
+    const sold = counts.Sold || 0, dns = counts.DNS || 0, noShow = counts.NoShow || 0,
+      incTime = counts.IncTime || 0, ni = counts.NI || 0, nq = counts.NQ || 0,
+      unresulted = counts.Unresulted || 0;
+    const resulted = sold + dns + noShow + incTime + ni + nq;
+    const total = resulted + unresulted;
+    const estimatesSent = sold + dns;
+    const oppPool = sold + dns + incTime + ni;
+    const full = mode === 'full';
+    return [
+      { key: 'Total', label: 'Total appointments', value: total, pct: null, rateLabel: null },
+      { key: 'Opportunities', label: 'Opportunities', value: oppPool, pct: full && resulted ? oppPool / resulted : null, rateLabel: 'Opp rate' },
+      { key: 'Demos', label: 'Demos', value: estimatesSent, pct: full && oppPool ? estimatesSent / oppPool : null, rateLabel: 'Demo-to-opp rate' },
+      { key: 'Sales', label: 'Sales', value: sold, pct: estimatesSent ? sold / estimatesSent : null, rateLabel: 'Close rate' },
+      { key: 'Unresulted', label: 'Unresulted', value: unresulted, pct: null, rateLabel: null },
+    ];
+  }
+
+  function renderSummaryRow(summary, start, end) {
+    const row = document.getElementById('apptSummaryRow');
+    row.innerHTML = '';
+    summary.forEach((s) => {
+      const tile = document.createElement('div');
+      tile.className = 'appt-summary-tile';
+      tile.innerHTML = `
+        <div class="appt-summary-label">${s.label}</div>
+        <div class="appt-summary-value">${s.value}</div>
+        ${s.pct != null ? `<div class="appt-summary-pct">${s.rateLabel ? s.rateLabel + ' ' : ''}${apptPct(s.pct)}</div>` : ''}
+        <div class="appt-summary-hint">Click to view list</div>`;
+      tile.addEventListener('click', () => toggleDrilldown(s.key, s.label, start, end));
+      row.appendChild(tile);
+    });
+  }
+
+  // Gathers every appointment/sale record making up one metric key, in
+  // [start, end]. Sold pulls from apptData.sold (the won-by-Won-Date list —
+  // the authoritative source for the Sold count, see functions/api/
+  // appointments.js); every other bucket pulls from apptData.events (the
+  // calendar-classification list). A virtual metric like Opportunities
+  // unions whichever of those its APPT_METRIC_BUCKETS entry names.
+  function drilldownRecords(key, start, end) {
+    const buckets = new Set(APPT_METRIC_BUCKETS[key] || [key]);
+    const out = [];
+    if (buckets.has('Sold')) {
+      for (const r of (apptData.sold || [])) {
+        if (r.date >= start && r.date <= end) out.push({ ...r, bucket: 'Sold', reason: null });
+      }
+    }
+    for (const r of (apptData.events || [])) {
+      if (buckets.has(r.bucket) && r.date >= start && r.date <= end) out.push(r);
+    }
+    out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    return out;
+  }
+
+  let drilldownOpenKey = null;
+  let drilldownOpenLabel = '';
+
+  function closeDrilldown() {
+    drilldownOpenKey = null;
+    drilldownOpenLabel = '';
+    document.getElementById('apptDrilldownPanel').style.display = 'none';
+    document.getElementById('apptDrilldownList').innerHTML = '';
+  }
+
+  function showDrilldownPanel(key, label, records) {
+    drilldownOpenKey = key;
+    drilldownOpenLabel = label;
+    const panel = document.getElementById('apptDrilldownPanel');
+    const listEl = document.getElementById('apptDrilldownList');
+    panel.style.display = 'block';
+    document.getElementById('apptDrilldownTitle').textContent = `${label} (${records.length})`;
+
+    const CAP = 200;
+    listEl.innerHTML = '';
+    if (!records.length) {
+      listEl.innerHTML = '<div class="lb-empty">Nothing in this bucket for the selected range.</div>';
+      return;
+    }
+    records.slice(0, CAP).forEach((r) => {
+      const repName = (apptData.reps && apptData.reps[r.assignedUserId]) || r.assignedUserId;
+      const row = document.createElement('div');
+      row.className = 'unres-row';
+      const link = goatContactUrl(r.contactId);
+      const valueLine = r.bucket === 'Sold' && r.value != null ? ` · ${fmtMoney(r.value)}` : '';
+      row.innerHTML = `
+        <div class="unres-date">${r.date} · <span class="unres-rep">${repName}</span>${valueLine}</div>
+        <div class="unres-title">${r.title || 'Untitled appointment'}</div>
+        ${r.reason ? `<div class="unres-reason">${r.reason}</div>` : ''}
+        ${link ? `<a class="unres-link" href="${link}" target="_blank" rel="noopener">Open contact in GOAT →</a>` : ''}`;
+      listEl.appendChild(row);
+    });
+    if (records.length > CAP) {
+      const note = document.createElement('div');
+      note.className = 'lb-empty';
+      note.textContent = `Showing the most recent ${CAP} of ${records.length} — narrow the date range to see the rest.`;
+      listEl.appendChild(note);
+    }
+  }
+
+  // Clicking the tile for whatever's already open closes it (toggle);
+  // clicking a different tile switches straight to it.
+  function toggleDrilldown(key, label, start, end) {
+    if (drilldownOpenKey === key) { closeDrilldown(); return; }
+    showDrilldownPanel(key, label, drilldownRecords(key, start, end));
+  }
+
+  // Called whenever the selected date range changes (picker, custom dates,
+  // or a background refresh) — keeps an already-open panel showing the
+  // right records for the new range instead of silently going stale, but
+  // doesn't open one that wasn't already open.
+  function refreshOpenDrilldown(start, end) {
+    if (!drilldownOpenKey) return;
+    showDrilldownPanel(drilldownOpenKey, drilldownOpenLabel, drilldownRecords(drilldownOpenKey, start, end));
+  }
+
+  document.getElementById('apptDrilldownClose').addEventListener('click', closeDrilldown);
 
   // Deep link straight to the contact record in GOAT (this location's
   // white-labeled GoHighLevel CRM) so a rep can open it and result the
@@ -1872,51 +2045,6 @@
     if (!contactId || !apptData.locationId) return null;
     return `https://app.goatbusinesssolutions.com/v2/location/${apptData.locationId}/contacts/detail/${contactId}`;
   }
-
-  function renderUnresultedList(start, end) {
-    const toggle = document.getElementById('apptUnresultedToggle');
-    const listEl = document.getElementById('apptUnresultedList');
-    const rows = (apptData.unresulted || []).filter((r) => r.date >= start && r.date <= end);
-
-    if (!rows.length) {
-      toggle.style.display = 'none';
-      listEl.style.display = 'none';
-      listEl.innerHTML = '';
-      return;
-    }
-
-    toggle.style.display = 'inline-flex';
-    toggle.textContent = (unresultedListOpen ? 'Hide' : 'Show') + ` unresulted list (${rows.length})`;
-    listEl.style.display = unresultedListOpen ? 'block' : 'none';
-    if (!unresultedListOpen) return; // skip building the DOM until it's actually opened
-
-    const CAP = 200;
-    listEl.innerHTML = '';
-    rows.slice(0, CAP).forEach((r) => {
-      const repName = (apptData.reps && apptData.reps[r.assignedUserId]) || r.assignedUserId;
-      const row = document.createElement('div');
-      row.className = 'unres-row';
-      const link = goatContactUrl(r.contactId);
-      row.innerHTML = `
-        <div class="unres-date">${r.date} · <span class="unres-rep">${repName}</span></div>
-        <div class="unres-title">${r.title || 'Untitled appointment'}</div>
-        <div class="unres-reason">${r.reason || ''}</div>
-        ${link ? `<a class="unres-link" href="${link}" target="_blank" rel="noopener">Open contact in GOAT to result it →</a>` : ''}`;
-      listEl.appendChild(row);
-    });
-    if (rows.length > CAP) {
-      const note = document.createElement('div');
-      note.className = 'lb-empty';
-      note.textContent = `Showing the most recent ${CAP} of ${rows.length} — narrow the date range to see the rest.`;
-      listEl.appendChild(note);
-    }
-  }
-
-  document.getElementById('apptUnresultedToggle').addEventListener('click', () => {
-    unresultedListOpen = !unresultedListOpen;
-    const range = currentApptRange();
-    if (range) renderUnresultedList(range[0], range[1]);
-  });
 
   async function fetchAppointments() {
     try {
