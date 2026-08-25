@@ -1,0 +1,15 @@
+{
+  "name": "js-construction-sales-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live sales dashboard for JS Construction, backed by the GoHighLevel API. Deploys as a Cloudflare Worker (static public/index.html + public/lib/appointments.js served via the assets binding, worker/index.js routes /api/* to functions/api/*.js).",
+  "scripts": {
+    "build": "mkdir -p public/lib && cp lib/appointments.js public/lib/appointments.js",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

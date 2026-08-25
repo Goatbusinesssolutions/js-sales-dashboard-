@@ -1,0 +1,1944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Sales Dashboard — JS Construction</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --surface-page:    #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-accent:  #2a78d6;
+    --series-muted:   #c3c2b7;
+    --series-track:   #cde2fb;
+    --success-text:   #006300;
+    --success-fill:   #0ca30c;
+    --success-glow-rgb: 12,163,12;
+    --critical-text:  #d03b3b;
+    --critical-glow-rgb: 208,59,59;
+    --card-shadow:    0 1px 2px rgba(11,11,11,0.04), 0 8px 24px rgba(11,11,11,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --surface-page:    #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-accent:  #3987e5;
+      --series-muted:   #383835;
+      --series-track:   rgba(57,135,229,0.22);
+      --success-text:   #0ca30c;
+      --success-fill:   #0ca30c;
+      --success-glow-rgb: 12,163,12;
+      --critical-text:  #e66767;
+      --critical-glow-rgb: 230,103,103;
+      --card-shadow:    0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --surface-page:    #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-accent:  #3987e5;
+    --series-muted:   #383835;
+    --series-track:   rgba(57,135,229,0.22);
+    --success-text:   #0ca30c;
+    --success-fill:   #0ca30c;
+    --success-glow-rgb: 12,163,12;
+    --critical-text:  #e66767;
+    --critical-glow-rgb: 230,103,103;
+    --card-shadow:    0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--surface-page);
+  }
+  body {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+
+  .dash { width: 100%; max-width: 800px; }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow);
+  }
+
+  /* header */
+  .dash-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 24px 28px 20px;
+  }
+  .dash-title { font-size: 19px; font-weight: 700; color: var(--text-primary); }
+  .dash-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+  .dash-header-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .icon-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .icon-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+  .icon-btn.spinning { animation: spin 0.8s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+  .load-banner {
+    margin: 0 28px; padding: 10px 14px; border-radius: 10px;
+    font-size: 12.5px; display: none; align-items: center; gap: 8px;
+  }
+  .load-banner.error { display: flex; background: rgba(208,59,59,0.10); color: var(--critical-text); margin-bottom: 16px; }
+  .load-banner.loading { display: flex; background: var(--surface-page); color: var(--text-muted); margin-bottom: 16px; }
+
+  .section-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 14px;
+  }
+
+  /* KPI row (2x2) */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--gridline);
+  }
+  .kpi-tile { background: var(--surface-1); padding: 16px 18px 18px; }
+  .kpi-label {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 8px;
+  }
+  .kpi-value { font-size: 24px; font-weight: 650; color: var(--text-primary); letter-spacing: -0.01em; line-height: 1; }
+  .kpi-count { font-size: 11.5px; color: var(--text-muted); margin-top: 5px; }
+  .kpi-delta { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-secondary); margin-top: 7px; }
+  .kpi-delta .arrow { color: var(--text-muted); flex-shrink: 0; }
+
+  /* comparison section (MTD vs last month) */
+  .compare-section { padding: 22px 28px 20px; border-top: 1px solid var(--gridline); }
+  .compare-row { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; }
+  .compare-block { min-width: 150px; }
+  .compare-block .kpi-label { margin-bottom: 8px; }
+  .compare-block .kpi-value { font-size: 28px; }
+  .compare-block .kpi-count { margin-top: 5px; }
+  .kpi-avg { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .compare-arrow-block {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; color: var(--text-secondary);
+    padding-bottom: 4px;
+  }
+  .compare-arrow-block .arrow { color: var(--text-muted); font-size: 16px; }
+  .compare-footnote-row {
+    margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gridline);
+    font-size: 12.5px; color: var(--text-secondary);
+  }
+  .compare-footnote-row strong { color: var(--text-primary); font-weight: 600; }
+
+  /* chart section */
+  .chart-section { padding: 22px 28px 20px; border-top: 1px solid var(--gridline); }
+  svg { display: block; overflow: visible; }
+  #barChart { width: 100%; height: auto; }
+  .bar { fill: var(--series-muted); }
+  .bar-accent { fill: var(--series-accent); }
+  .bar-peak { fill: var(--series-accent); opacity: 0.55; }
+  .gridline-el { stroke: var(--gridline); stroke-width: 1; }
+  .axis-label { font-size: 10px; fill: var(--text-muted); }
+  .day-label { font-size: 10px; fill: var(--text-muted); }
+  .bar-val-label { font-size: 10.5px; font-weight: 700; fill: var(--text-primary); }
+  .bar-val-label-accent { font-size: 10.5px; font-weight: 700; fill: var(--series-accent); }
+
+  .footnote { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.5; }
+
+  /* pacing meter section */
+  .pacing-section { padding: 22px 28px 26px; border-top: 1px solid var(--gridline); }
+  .pacing-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 6px; }
+  .pacing-fraction { font-size: 13px; color: var(--text-secondary); }
+  .pacing-fraction strong { color: var(--text-primary); font-weight: 700; }
+  .meter-track { width: 100%; height: 10px; border-radius: 999px; background: var(--series-track); overflow: hidden; }
+  .meter-fill { height: 100%; border-radius: 999px; background: var(--series-accent); transition: width 0.7s cubic-bezier(.2,.8,.2,1); }
+  .pacing-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 16px; }
+  .pacing-stat-label { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .pacing-stat-value { font-size: 16px; font-weight: 650; color: var(--text-primary); }
+  .pacing-stat-value.accent { color: var(--series-accent); }
+
+  /* catch-up / on-pace callouts */
+  .pace-callout { margin-top: 16px; padding: 12px 14px; border-radius: 10px; font-size: 12.5px; line-height: 1.55; }
+  .pace-callout.onpace { background: var(--series-track); color: var(--text-primary); }
+  .pace-callout.behind { background: rgba(208,59,59,0.10); color: var(--text-primary); }
+  .pace-callout strong { font-weight: 700; }
+  .pace-callout.onpace strong { color: var(--series-accent); }
+  .pace-callout.behind strong { color: var(--critical-text); }
+  .hero-secondary-pace { font-size: 10.5px; margin-top: 5px; font-weight: 600; }
+  .hero-secondary-pace.onpace { color: var(--series-accent); }
+  .hero-secondary-pace.behind { color: var(--critical-text); }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--text-primary);
+    color: var(--surface-1);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 9px;
+    border-radius: 6px;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translate(-50%, -100%);
+    transition: opacity 0.1s;
+    z-index: 10;
+  }
+
+  /* hero weekly target + monthly/yearly targets */
+  .hero-target-section { padding: 24px 28px 22px; border-bottom: 1px solid var(--gridline); position: relative; overflow: hidden; z-index: 0; }
+  .hero-target-top { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .hero-target-label { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+  .target-badge {
+    display: none; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 700; color: var(--success-text);
+  }
+  .target-badge.visible { display: inline-flex; }
+  .target-badge .check {
+    width: 15px; height: 15px; border-radius: 999px; background: var(--success-fill);
+    color: #fff; font-size: 10px; line-height: 15px; text-align: center; flex-shrink: 0;
+  }
+  .hero-value { font-size: 44px; font-weight: 750; letter-spacing: -0.02em; line-height: 1; color: var(--text-primary); }
+  .hero-value .hero-of { font-size: 17px; font-weight: 600; color: var(--text-muted); margin-left: 8px; }
+  .hero-meter-track { width: 100%; height: 16px; border-radius: 999px; background: var(--series-track); overflow: hidden; margin-top: 16px; }
+  .hero-meter-fill { height: 100%; border-radius: 999px; background: var(--series-accent); transition: width 0.7s cubic-bezier(.2,.8,.2,1); }
+  .hero-meter-fill.reached { background: var(--success-fill); }
+  .hero-stat-row { display: flex; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+  .hero-stat-row strong { color: var(--text-primary); font-weight: 700; }
+  .hero-stat-row .success { color: var(--success-text); font-weight: 700; }
+
+  .hero-secondary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 20px; }
+  .hero-secondary-tile { background: var(--surface-page); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 15px; position: relative; overflow: hidden; z-index: 0; }
+  .hero-secondary-label {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 7px;
+  }
+  .hero-mini-badge { font-size: 10px; font-weight: 700; color: var(--success-text); display: none; }
+  .hero-mini-badge.visible { display: inline; }
+  .hero-secondary-value { font-size: 19px; font-weight: 700; color: var(--text-primary); }
+  .hero-secondary-value .hero-of { font-size: 11.5px; color: var(--text-muted); font-weight: 500; margin-left: 4px; }
+  .hero-secondary-meter-track { width: 100%; height: 8px; border-radius: 999px; background: var(--series-track); overflow: hidden; margin-top: 9px; }
+  .hero-secondary-meter-fill { height: 100%; border-radius: 999px; background: var(--series-accent); transition: width 0.7s cubic-bezier(.2,.8,.2,1); }
+  .hero-secondary-meter-fill.reached { background: var(--success-fill); }
+  .hero-secondary-pct { font-size: 11px; color: var(--text-secondary); margin-top: 7px; }
+  .hero-secondary-pct strong { color: var(--text-primary); font-weight: 700; }
+
+  @media (max-width: 480px) {
+    .hero-value { font-size: 34px; }
+    .hero-secondary-row { grid-template-columns: 1fr; }
+  }
+
+  /* glow wrappers — a separate outer box (no overflow:hidden of its own) so a
+     box-shadow glow isn't clipped by the confetti-containing overflow:hidden
+     on .hero-target-section / .hero-secondary-tile inside it. */
+  .glow-wrap {
+    --glow-blur: 30px; --glow-spread: 5px;
+    border-radius: 16px;
+  }
+  .glow-wrap.glow-sm { --glow-blur: 18px; --glow-spread: 3px; border-radius: 12px; }
+  .glow-wrap.status-on { animation: glow-pulse-green 2.4s ease-in-out infinite; }
+  .glow-wrap.status-off { animation: glow-pulse-red 2.4s ease-in-out infinite; }
+  @keyframes glow-pulse-green {
+    0%, 100% { box-shadow: 0 0 calc(var(--glow-blur) * 0.4) 0px rgba(var(--success-glow-rgb), 0.16); }
+    50%      { box-shadow: 0 0 var(--glow-blur) var(--glow-spread) rgba(var(--success-glow-rgb), 0.55); }
+  }
+  @keyframes glow-pulse-red {
+    0%, 100% { box-shadow: 0 0 calc(var(--glow-blur) * 0.4) 0px rgba(var(--critical-glow-rgb), 0.14); }
+    50%      { box-shadow: 0 0 var(--glow-blur) var(--glow-spread) rgba(var(--critical-glow-rgb), 0.45); }
+  }
+
+  /* full-section wash — a pseudo-element tinting the ENTIRE card area (not
+     just the outer rim), sitting behind the real content (z-index:-1 inside
+     the section's own stacking context, set up by the z-index:0 above) and
+     clipped to the section's own rounded corners by its overflow:hidden.
+     pointer-events:none keeps it from blocking clicks (the "Back to
+     current" button lives inside .hist-header-section). */
+  .hero-target-section::before,
+  .hero-secondary-tile::before,
+  .hist-header-section::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .hero-target-section.status-on::before,
+  .hero-secondary-tile.status-on::before,
+  .hist-header-section.status-on::before {
+    background: rgba(var(--success-glow-rgb), 0.16);
+    opacity: 1;
+    animation: section-wash-pulse 2.4s ease-in-out infinite;
+  }
+  .hero-target-section.status-off::before,
+  .hero-secondary-tile.status-off::before,
+  .hist-header-section.status-off::before {
+    background: rgba(var(--critical-glow-rgb), 0.14);
+    opacity: 1;
+    animation: section-wash-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes section-wash-pulse {
+    0%, 100% { opacity: 0.5; }
+    50%      { opacity: 1; }
+  }
+
+  .confetti-piece {
+    position: absolute; top: -12px; width: 6px; height: 11px; opacity: 0.95;
+    animation: confetti-fall 1.7s ease-in forwards;
+    will-change: transform, opacity;
+  }
+  @keyframes confetti-fall {
+    0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+    100% { transform: translateY(150px) rotate(410deg); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .confetti-piece { display: none; }
+    .hero-meter-fill, .hero-secondary-meter-fill, .meter-fill { transition: none; }
+    .glow-wrap.status-on, .glow-wrap.status-off { animation: none; }
+    .glow-wrap.status-on { box-shadow: 0 0 var(--glow-blur) var(--glow-spread) rgba(var(--success-glow-rgb), 0.4); }
+    .glow-wrap.status-off { box-shadow: 0 0 var(--glow-blur) var(--glow-spread) rgba(var(--critical-glow-rgb), 0.32); }
+    .hero-target-section.status-on::before, .hero-secondary-tile.status-on::before, .hist-header-section.status-on::before,
+    .hero-target-section.status-off::before, .hero-secondary-tile.status-off::before, .hist-header-section.status-off::before {
+      animation: none; opacity: 1;
+    }
+  }
+
+  /* leaderboard section */
+  .leaderboard-section { padding: 22px 28px 26px; border-top: 1px solid var(--gridline); }
+  .lb-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+  .lb-tabs { display: flex; gap: 6px; }
+  .lb-tab {
+    background: none; border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 13px; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    cursor: pointer; font-family: inherit;
+  }
+  .lb-tab:hover:not(.active) { color: var(--text-primary); border-color: var(--text-muted); }
+  .lb-tab.active { background: var(--series-accent); border-color: var(--series-accent); color: #fff; }
+  .lb-range { font-size: 11.5px; color: var(--text-muted); }
+  .lb-row {
+    display: grid;
+    grid-template-columns: 20px minmax(0,124px) 1fr 84px;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+  }
+  .lb-rank { font-size: 12px; font-weight: 700; color: var(--text-muted); text-align: right; }
+  .lb-rank.lb-rank-1 { color: var(--series-accent); }
+  .lb-name { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lb-bar-track { height: 15px; border-radius: 4px; background: var(--series-track); overflow: hidden; }
+  .lb-bar-fill { height: 100%; border-radius: 4px; background: var(--series-accent); min-width: 2px; }
+  .lb-vals { text-align: right; line-height: 1.25; }
+  .lb-value { font-size: 12.5px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .lb-count { font-size: 10.5px; color: var(--text-muted); }
+  .lb-empty { font-size: 12.5px; color: var(--text-muted); padding: 10px 0; }
+  .lb-grand-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 0 0; margin-top: 8px; border-top: 1px solid var(--gridline);
+  }
+  .lb-grand-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
+  .lb-grand-value { font-size: 14.5px; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .lb-grand-count { font-size: 10.5px; color: var(--text-muted); font-weight: 600; margin-left: 6px; }
+
+  @media (max-width: 640px) {
+    .kpi-row { grid-template-columns: repeat(2, 1fr); }
+    .pacing-stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 420px) {
+    .kpi-row { grid-template-columns: 1fr; }
+    .pacing-stats { grid-template-columns: 1fr; }
+    .lb-row { grid-template-columns: 16px minmax(0,84px) 1fr 72px; gap: 8px; }
+    .lb-name { font-size: 12px; }
+    .lb-value { font-size: 11.5px; }
+  }
+
+  /* appointment outcomes section */
+  .appt-section { padding: 22px 28px 26px; border-top: 1px solid var(--gridline); }
+  .appt-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }
+  .appt-range-picker { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .appt-select {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px; color: var(--text-primary); font-family: inherit;
+  }
+  .appt-custom-dates { display: none; gap: 6px; align-items: center; }
+  .appt-custom-dates.visible { display: flex; }
+  .appt-mode-badge { font-size: 10.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+  .appt-mode-badge.full { background: var(--series-track); color: var(--series-accent); }
+  .appt-mode-badge.modified { background: rgba(208,59,59,0.10); color: var(--critical-text); }
+  .appt-range-label { font-size: 11.5px; color: var(--text-muted); margin-bottom: 4px; }
+  .appt-counts-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--gridline); margin-top: 14px; border-radius: 10px; overflow: hidden; }
+  .appt-count-tile { background: var(--surface-1); padding: 12px 8px; text-align: center; }
+  .appt-count-label { font-size: 9px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+  .appt-count-value { font-size: 19px; font-weight: 700; color: var(--text-primary); }
+  .appt-rates-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+  .appt-rate-tile { background: var(--surface-page); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .appt-rate-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 7px; }
+  .appt-rate-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+  .appt-note { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.5; }
+  .unres-row { padding: 10px 0; border-bottom: 1px solid var(--gridline); font-size: 12.5px; }
+  .unres-row:last-child { border-bottom: none; }
+  .unres-date { font-weight: 700; color: var(--text-primary); }
+  .unres-rep { font-weight: 600; color: var(--series-accent); }
+  .unres-title { color: var(--text-secondary); margin-top: 3px; }
+  .unres-reason { color: var(--text-muted); margin-top: 3px; }
+  .unres-link { display: inline-block; margin-top: 6px; font-size: 11.5px; font-weight: 600; color: var(--series-accent); text-decoration: none; }
+  .unres-link:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .appt-counts-row { grid-template-columns: repeat(3, 1fr); }
+    .appt-rates-row { grid-template-columns: 1fr; }
+  }
+
+  /* historical week/month picker */
+  .period-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 28px 18px;
+  }
+  .period-bar-label { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+  .period-picker {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px; color: var(--text-primary); font-family: inherit; max-width: 220px;
+  }
+  .hist-back-btn {
+    background: none; border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 13px; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    cursor: pointer; font-family: inherit;
+  }
+  .hist-back-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+  .hist-header-section { padding: 22px 28px 20px; border-bottom: 1px solid var(--gridline); position: relative; overflow: hidden; z-index: 0; }
+  .hist-back-row { margin-bottom: 14px; }
+  .hist-stat-row { display: flex; align-items: flex-end; gap: 24px; margin-top: 12px; flex-wrap: wrap; }
+  .hist-stat-value { font-size: 36px; font-weight: 750; letter-spacing: -0.02em; line-height: 1; color: var(--text-primary); }
+  .hist-stat-count { font-size: 13px; color: var(--text-muted); margin-top: 6px; }
+  .hist-stat-label { font-size: 11px; color: var(--text-muted); margin-bottom: 3px; }
+  .hist-stat-mini { font-size: 18px; font-weight: 650; color: var(--text-primary); }
+</style>
+</head>
+<body>
+
+<div class="viz-root dash">
+  <div class="card">
+
+    <div class="dash-header">
+      <div>
+        <div class="dash-title">Daily Sales Dashboard</div>
+        <div class="dash-sub" id="dashSub">JS Construction · Won opportunities, by Won Date · Loading…</div>
+      </div>
+      <div class="dash-header-controls">
+        <button class="icon-btn" id="refreshBtn" title="Refresh now" aria-label="Refresh now">⟳</button>
+        <button class="icon-btn" id="themeToggle" title="Toggle theme" aria-label="Toggle light/dark theme">◐</button>
+      </div>
+    </div>
+
+    <div class="load-banner loading" id="loadingBanner">Loading live data from GOAT…</div>
+    <div class="load-banner error" id="errorBanner"></div>
+
+    <div class="period-bar">
+      <label for="periodPicker" class="period-bar-label">Viewing</label>
+      <select id="periodPicker" class="period-picker">
+        <option value="current" selected>Current — live</option>
+        <option value="thisWeek">This week</option>
+        <option value="lastWeek">Last week</option>
+        <option value="thisMonth">This month</option>
+        <option value="lastMonth">Last month</option>
+        <option value="thisYear">This year</option>
+        <option value="custom">Custom range…</option>
+      </select>
+      <span class="appt-custom-dates" id="periodCustomDates">
+        <input type="date" class="appt-select" id="periodCustomStart">
+        <span style="color:var(--text-muted);font-size:12px;">to</span>
+        <input type="date" class="appt-select" id="periodCustomEnd">
+      </span>
+    </div>
+
+    <div id="liveView">
+    <div class="glow-wrap" id="weekGlowWrap">
+    <div class="hero-target-section" id="targetSection">
+      <div class="hero-target-top">
+        <div class="hero-target-label">Weekly sales target — the number we're chasing</div>
+        <div class="target-badge" id="targetBadge"><span class="check">✓</span><span>Target reached</span></div>
+      </div>
+      <div class="hero-value" id="heroValue">—</div>
+      <div class="hero-meter-track"><div class="hero-meter-fill" id="targetMeterFill" style="width:0%"></div></div>
+      <div class="hero-stat-row">
+        <span>Progress — <strong id="targetPct">—</strong></span>
+        <span class="success" id="targetDeltaStat"><strong id="targetDelta">—</strong></span>
+      </div>
+      <div class="pace-callout" id="weekPaceCallout" style="display:none;"></div>
+
+      <div class="hero-secondary-row">
+        <div class="glow-wrap glow-sm" id="monthGlowWrap">
+        <div class="hero-secondary-tile" id="monthTile">
+          <div class="hero-secondary-label"><span>Monthly target</span><span class="hero-mini-badge" id="monthBadge">✓ reached</span></div>
+          <div class="hero-secondary-value" id="monthValue">—</div>
+          <div class="hero-secondary-meter-track"><div class="hero-secondary-meter-fill" id="monthMeterFill" style="width:0%"></div></div>
+          <div class="hero-secondary-pct" id="monthPctLine">—</div>
+          <div class="hero-secondary-pace" id="monthPaceNote"></div>
+        </div>
+        </div>
+        <div class="glow-wrap glow-sm" id="yearGlowWrap">
+        <div class="hero-secondary-tile" id="yearTile">
+          <div class="hero-secondary-label"><span>Yearly target</span><span class="hero-mini-badge" id="yearBadge">✓ reached</span></div>
+          <div class="hero-secondary-value" id="yearValue">—</div>
+          <div class="hero-secondary-meter-track"><div class="hero-secondary-meter-fill" id="yearTargetMeterFill" style="width:0%"></div></div>
+          <div class="hero-secondary-pct" id="yearPctLine">—</div>
+          <div class="hero-secondary-pace" id="yearPaceNote"></div>
+        </div>
+        </div>
+      </div>
+      <div class="footnote" id="targetFootnote" style="margin-top:16px;"></div>
+    </div>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi-tile">
+        <div class="kpi-label">Today</div>
+        <div class="kpi-value" id="todayValue">—</div>
+        <div class="kpi-count" id="todayCount">—</div>
+        <div class="kpi-delta" id="todayDelta">&nbsp;</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Yesterday</div>
+        <div class="kpi-value" id="yesterdayValue">—</div>
+        <div class="kpi-count" id="yesterdayCount">—</div>
+        <div class="kpi-delta">&nbsp;</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">This week</div>
+        <div class="kpi-value" id="weekValue">—</div>
+        <div class="kpi-count" id="weekCount">—</div>
+        <div class="kpi-delta" id="weekDelta">&nbsp;</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Last week</div>
+        <div class="kpi-value" id="lastWeekValue">—</div>
+        <div class="kpi-count" id="lastWeekCount">—</div>
+        <div class="kpi-delta">&nbsp;</div>
+      </div>
+    </div>
+
+    <div class="compare-section">
+      <div class="section-label">Month to date vs. last month</div>
+      <div class="compare-row">
+        <div class="compare-block">
+          <div class="kpi-label" id="mtdLabel">MTD</div>
+          <div class="kpi-value" id="mtdValue">—</div>
+          <div class="kpi-count" id="mtdCount">—</div>
+          <div class="kpi-avg" id="mtdAvg">—</div>
+        </div>
+        <div class="compare-arrow-block"><span class="arrow">→</span></div>
+        <div class="compare-block">
+          <div class="kpi-label" id="lastMonthSameLabel">Same period last month</div>
+          <div class="kpi-value" id="lastMonthSameValue">—</div>
+          <div class="kpi-count" id="lastMonthSameCount">—</div>
+          <div class="kpi-avg" id="lastMonthSameAvg">—</div>
+        </div>
+        <div class="compare-arrow-block"><span class="arrow" id="mtdDeltaArrow" style="color:var(--series-accent);">—</span></div>
+      </div>
+      <div class="compare-footnote-row" id="compareFootnote">—</div>
+    </div>
+
+    <div class="chart-section">
+      <div class="section-label" id="chartLabel">Daily sales</div>
+      <svg id="barChart" width="704" height="200" viewBox="0 0 704 200"></svg>
+      <div class="footnote" id="chartFootnote">—</div>
+    </div>
+
+    <div class="chart-section">
+      <div class="section-label">Monthly trend — click a month to see its details</div>
+      <svg id="monthlyBarChart" width="704" height="200" viewBox="0 0 704 200"></svg>
+      <div class="footnote" id="monthlyChartFootnote">—</div>
+    </div>
+
+    <div class="pacing-section">
+      <div class="pacing-head">
+        <div class="section-label" style="margin-bottom:0;">Month pacing</div>
+        <div class="pacing-fraction" id="monthPacingFraction">—</div>
+      </div>
+      <div class="meter-track"><div class="meter-fill" id="meterFill" style="width:0%"></div></div>
+      <div class="pacing-stats">
+        <div>
+          <div class="pacing-stat-label">Working days left</div>
+          <div class="pacing-stat-value" id="monthDaysLeft">—</div>
+        </div>
+        <div>
+          <div class="pacing-stat-label">Avg / working day</div>
+          <div class="pacing-stat-value" id="monthAvgDay">—</div>
+        </div>
+        <div>
+          <div class="pacing-stat-label">Projected month total</div>
+          <div class="pacing-stat-value accent" id="monthProjected">—</div>
+        </div>
+        <div>
+          <div class="pacing-stat-label">vs. last month</div>
+          <div class="pacing-stat-value accent" id="monthVsLast">—</div>
+        </div>
+      </div>
+      <div class="pace-callout" id="monthPaceCallout" style="display:none;"></div>
+      <div class="footnote">Working days = Mon–Sat; a sale on Sunday still counts toward the dollar totals, it just isn't counted in the day denominator. Projection = MTD sales ÷ working days elapsed × working days in the month — a straight-line run-rate, not a target.</div>
+    </div>
+
+    <div class="pacing-section">
+      <div class="pacing-head">
+        <div class="section-label" style="margin-bottom:0;">Year to date</div>
+        <div class="pacing-fraction" id="yearPacingFraction">—</div>
+      </div>
+      <div class="compare-row" style="margin-bottom:14px;">
+        <div class="compare-block">
+          <div class="kpi-label" id="ytdLabel">YTD</div>
+          <div class="kpi-value" style="font-size:28px;" id="ytdValue">—</div>
+          <div class="kpi-count" id="ytdCount">—</div>
+          <div class="kpi-avg" id="ytdAvg">—</div>
+        </div>
+      </div>
+      <div class="meter-track"><div class="meter-fill" id="yearMeterFill" style="width:0%"></div></div>
+      <div class="pacing-stats">
+        <div>
+          <div class="pacing-stat-label">Working days left</div>
+          <div class="pacing-stat-value" id="yearDaysLeft">—</div>
+        </div>
+        <div>
+          <div class="pacing-stat-label">Avg / working day</div>
+          <div class="pacing-stat-value" id="yearAvgDay">—</div>
+        </div>
+        <div>
+          <div class="pacing-stat-label">Projected year total</div>
+          <div class="pacing-stat-value accent" id="yearProjected">—</div>
+        </div>
+        <div>
+          <div class="pacing-stat-label">% of year elapsed</div>
+          <div class="pacing-stat-value" id="yearPctElapsed">—</div>
+        </div>
+      </div>
+      <div class="pace-callout" id="yearPaceCallout" style="display:none;"></div>
+      <div class="footnote">Working days = Mon–Sat, same convention as month pacing. Projection = YTD sales ÷ working days elapsed × working days in the year — a straight-line run-rate across the full year, not a target. Same all-pipelines/Won-Date basis as every other total on this dashboard.</div>
+    </div>
+
+    <div class="leaderboard-section">
+      <div class="lb-head">
+        <div class="section-label" style="margin-bottom:0;">Sales rep leaderboard</div>
+        <div class="lb-tabs" id="lbTabs">
+          <button class="lb-tab" data-period="week">This week</button>
+          <button class="lb-tab active" data-period="month">Month to date</button>
+          <button class="lb-tab" data-period="year">Year to date</button>
+        </div>
+      </div>
+      <div class="lb-range" id="lbRange" style="margin-bottom:12px;">—</div>
+      <div id="lbRows"></div>
+      <div class="footnote">Ranked by total $ of won opportunities (owner = assignedTo), same all-pipelines/Won-Date basis as the totals above. Deal count shown beside each total. A few rep accounts carry limited GOAT permissions and may reflect production/install assignment rather than the original point of sale on older deals — worth a gut-check if that skews the ranking.</div>
+    </div>
+    </div><!-- /liveView -->
+
+    <div id="historicalView" style="display:none;">
+      <div class="glow-wrap" id="histGlowWrap">
+      <div class="hist-header-section" id="histHeaderSection">
+        <div class="hist-back-row">
+          <button class="hist-back-btn" id="histBackBtn">← Back to current</button>
+        </div>
+        <div class="hero-target-label" id="histLabel">—</div>
+        <div class="hist-stat-row">
+          <div>
+            <div class="hist-stat-value" id="histTotal">—</div>
+            <div class="hist-stat-count" id="histCount">—</div>
+          </div>
+          <div>
+            <div class="hist-stat-label">Avg deal</div>
+            <div class="hist-stat-mini" id="histAvg">—</div>
+          </div>
+        </div>
+        <div class="hist-compare-line" id="histCompareLine" style="font-size:12.5px;color:var(--text-secondary);margin-top:10px;"></div>
+        <div class="pace-callout" id="histTargetCallout" style="margin-top:14px;display:none;">
+          <strong id="histTargetHeadline">—</strong><span id="histTargetDetail"></span>
+        </div>
+      </div>
+      </div>
+
+      <div class="chart-section">
+        <div class="section-label" id="histChartLabel">Daily sales</div>
+        <svg id="histBarChart" width="704" height="200" viewBox="0 0 704 200"></svg>
+        <div class="footnote">Bars show won-opportunity value by the deal's Won Date, for the period selected above.</div>
+      </div>
+
+      <div class="leaderboard-section">
+        <div class="lb-head">
+          <div class="section-label" style="margin-bottom:0;">Sales rep leaderboard</div>
+        </div>
+        <div class="lb-range" id="histLbRange" style="margin-bottom:12px;"></div>
+        <div id="histLbRows"></div>
+        <div class="footnote">Ranked by total $ of won opportunities (owner = assignedTo) for the period selected above.</div>
+      </div>
+    </div><!-- /historicalView -->
+
+    <div class="appt-section" id="apptSection">
+      <div class="appt-head">
+        <div class="section-label" style="margin-bottom:0;">Appointment outcomes</div>
+        <div class="appt-range-picker">
+          <select class="appt-select" id="apptRangeSelect">
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="thisWeek" selected>This week</option>
+            <option value="lastWeek">Last week</option>
+            <option value="mtd">Month to date</option>
+            <option value="lastMonth">Last month</option>
+            <option value="ytd">Year to date</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          <span class="appt-custom-dates" id="apptCustomDates">
+            <input type="date" class="appt-select" id="apptCustomStart">
+            <span style="color:var(--text-muted);font-size:12px;">to</span>
+            <input type="date" class="appt-select" id="apptCustomEnd">
+          </span>
+          <span class="appt-mode-badge" id="apptModeBadge">—</span>
+        </div>
+      </div>
+      <div class="appt-range-label" id="apptRangeLabel">—</div>
+
+      <div class="appt-counts-row" id="apptCountsRow"></div>
+      <div class="appt-rates-row" id="apptRatesRow"></div>
+      <div class="appt-note" id="apptDollarNote" style="font-weight:600;">$ Sold here is counted by <u>Won Date</u> — the same date basis as the Daily Sales Dashboard at the top of the page — so the totals for any matching date range agree exactly. Demo/DNS/No Show/Inc. Time/NI/NQ still reflect the estimate appointment itself, so a deal quoted on one day and won on a later one shows its estimate outcome on the appointment's date and its sale on the day it actually won; a deal that closed with no matching appointment at all still counts as a sale (and a demo, for the rate math) on the day it won.</div>
+      <div class="appt-note" id="apptNote">Loading appointment outcomes…</div>
+
+      <button class="hist-back-btn" id="apptUnresultedToggle" style="display:none;margin-top:12px;">Show unresulted list</button>
+      <div id="apptUnresultedList" style="display:none;margin-top:12px;"></div>
+
+      <div style="margin-top:20px;">
+        <div class="lb-head" style="margin-bottom:10px;">
+          <div class="section-label" style="margin-bottom:0;">Rep breakdown — this period</div>
+        </div>
+        <div id="apptRepRows"></div>
+        <div class="footnote">$ sold = total value of that rep's won deals by Won Date (see the note above the counts) — attributed to the opportunity's own owner, not necessarily whoever ran the original estimate appointment; usually the same person, occasionally not. Appointments = every resulted appointment for that rep (Sold + DNS + No Show + Inc. Time + Not Interested + Not Qualified) — the same total the counts row above sums to; excludes Unresulted, cancelled, and upcoming appointments. Estimates sent = Sold + DNS (both mean a price was actually given). Close rate = Sold ÷ Estimates sent in both modes, so it always divides out exactly. Demo rate (Estimates sent ÷ Opportunities) also counts Inc. Time and Not Interested as opportunities in Full mode, per the training manual, so it won't divide out from the appointments/estimates counts shown here quite as cleanly.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+  import { sumRange, computeRates, modeForRange } from './lib/appointments.js';
+
+  const REFRESH_INTERVAL_MS = 60 * 1000; // re-fetch every 1 min while the tab is open
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  let latestData = null;
+  let currentLbPeriod = 'month';
+  // Tracks, per historical-view preset, whether it was already showing
+  // "reached" the last time we rendered it — so switching between periods in
+  // the dropdown (or a background refresh re-rendering the same one) only
+  // fires confetti the moment a given period is first revealed as reached,
+  // not every time you revisit it.
+  const histReachedState = {};
+
+  function fmtMoney(v) { return '$' + Math.round(v).toLocaleString(); }
+  function fmtMoneyAbs(v) { return '$' + Math.round(Math.abs(v)).toLocaleString(); }
+  function fmtPct(v, digits = 1) { return (v == null ? '—' : Math.abs(v).toFixed(digits) + '%'); }
+
+  function parseDateStr(s) {
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  }
+  function fmtShortDate(s) {
+    const d = parseDateStr(s);
+    return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  }
+  function fmtRange(start, end) {
+    const a = parseDateStr(start), b = parseDateStr(end);
+    if (a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth()) {
+      return `${MONTHS[a.getUTCMonth()]} ${a.getUTCDate()}–${b.getUTCDate()}`;
+    }
+    return `${fmtShortDate(start)} – ${fmtShortDate(end)}`;
+  }
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs) {
+    const e = document.createElementNS(svgNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function launchConfetti(container) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (window.matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.getAttribute('data-theme') !== 'light');
+    const palette = dark
+      ? ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#0ca30c']
+      : ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#0ca30c'];
+    for (let i = 0; i < 26; i++) {
+      const piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      piece.style.left = (Math.random() * 100) + '%';
+      piece.style.background = palette[i % palette.length];
+      piece.style.animationDelay = (Math.random() * 0.35) + 's';
+      piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+      piece.style.borderRadius = Math.random() > 0.5 ? '2px' : '999px';
+      container.appendChild(piece);
+      piece.addEventListener('animationend', () => piece.remove());
+    }
+  }
+
+  // ---- section renderers ----
+
+  function renderHeader(data) {
+    const asOf = new Date(data.asOf);
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: data.asOfTZ, month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    });
+    document.getElementById('dashSub').textContent =
+      `JS Construction · Won opportunities, by Won Date · Live as of ${fmt.format(asOf)}`;
+  }
+
+  // Shared "what do we need to do" text for a target block that isn't
+  // reached yet. onPace (projected period-end total already clears target)
+  // gets a short reassurance; behind pace gets the concrete catch-up ask,
+  // broken into whatever granularities the block computed (perWorkingDay
+  // always; perWeek / perMonth only where the period is long enough for
+  // that unit to mean something — see aggregate.js paceBlock()).
+  // unit: bare noun — 'week' | 'month' | 'year' — the template supplies "the ".
+  function paceMessage(block, unit) {
+    if (block.reached) return null;
+    if (block.onPace) {
+      return { state: 'onpace', html: `<strong>On pace</strong> to clear the ${unit} target at the current rate.` };
+    }
+    if (!block.catchUp) return null; // no working days left in the period to catch up in
+    const c = block.catchUp;
+    let need = `<strong>${fmtMoney(c.perWorkingDay)}/working day</strong>`;
+    const extras = [];
+    if (c.perWeek) extras.push(`~${fmtMoney(c.perWeek)}/week`);
+    if (c.perMonth) extras.push(`~${fmtMoney(c.perMonth)}/month`);
+    if (extras.length) need += ` (${extras.join(', ')})`;
+    return { state: 'behind', html: `Behind pace. Need ${need} for the rest of the ${unit} to close the ${fmtMoney(c.remaining)} gap.` };
+  }
+
+  // Dynamic glow status: green ("on") once the target is reached OR the block
+  // is still on pace to reach it by period-end; red ("off") once it's behind
+  // pace with no way to reasonably expect it'll close on its own.
+  // Sets the same status-on/status-off pair on the outer glow-wrap (drives the
+  // soft outward halo) AND the inner section itself (drives the full-area
+  // background wash), so the whole card glows, not just its edge.
+  function applyGlow(wrapEl, block, sectionEl) {
+    const on = block.reached || block.onPace;
+    wrapEl.classList.toggle('status-on', on);
+    wrapEl.classList.toggle('status-off', !on);
+    if (sectionEl) {
+      sectionEl.classList.toggle('status-on', on);
+      sectionEl.classList.toggle('status-off', !on);
+    }
+  }
+
+  function renderTargets(data) {
+    const t = data.targets;
+
+    document.getElementById('heroValue').innerHTML =
+      `${fmtMoney(t.weekly.total)}<span class="hero-of">of ${fmtMoney(t.weekly.target)}</span>`;
+    document.getElementById('targetPct').textContent = Math.round(t.weekly.pct) + '%';
+    document.getElementById('targetDelta').textContent = t.weekly.reached
+      ? `${fmtMoneyAbs(t.weekly.diff)} over target`
+      : `${fmtMoneyAbs(t.weekly.diff)} short of target`;
+    document.getElementById('targetDeltaStat').classList.toggle('success', t.weekly.reached);
+    const wasReachedBefore = document.getElementById('targetBadge').classList.contains('visible');
+    document.getElementById('targetBadge').classList.toggle('visible', t.weekly.reached);
+    const weekFill = document.getElementById('targetMeterFill');
+    requestAnimationFrame(() => {
+      weekFill.style.width = Math.min(100, t.weekly.pct) + '%';
+      weekFill.classList.toggle('reached', t.weekly.reached);
+    });
+    applyGlow(document.getElementById('weekGlowWrap'), t.weekly, document.getElementById('targetSection'));
+    // only celebrate on the transition into "reached" (or first load if already reached),
+    // not on every 5-minute refresh once it's already showing
+    if (t.weekly.reached && !wasReachedBefore) {
+      launchConfetti(document.getElementById('targetSection'));
+    }
+
+    const weekCallout = document.getElementById('weekPaceCallout');
+    const weekMsg = paceMessage(t.weekly, 'week');
+    if (weekMsg) {
+      weekCallout.style.display = 'block';
+      weekCallout.className = 'pace-callout ' + weekMsg.state;
+      weekCallout.innerHTML = weekMsg.html;
+    } else {
+      weekCallout.style.display = 'none';
+    }
+
+    function secondary(block, ids, periodLabel, periodNoun) {
+      document.getElementById(ids.value).innerHTML =
+        `${fmtMoney(block.total)}<span class="hero-of">of ${fmtMoney(block.target)}</span>`;
+      document.getElementById(ids.pctLine).innerHTML =
+        `<strong>${Math.round(block.pct)}%</strong> of target · ${periodLabel}`;
+      const badgeEl = document.getElementById(ids.badge);
+      const wasReachedBefore = badgeEl.classList.contains('visible');
+      badgeEl.classList.toggle('visible', block.reached);
+      const fillEl = document.getElementById(ids.fill);
+      requestAnimationFrame(() => {
+        fillEl.style.width = Math.min(100, block.pct) + '%';
+        fillEl.classList.toggle('reached', block.reached);
+      });
+      const tileEl = document.getElementById(ids.tile);
+      applyGlow(document.getElementById(ids.glowWrap), block, tileEl);
+      if (block.reached && !wasReachedBefore) {
+        launchConfetti(tileEl);
+      }
+      const noteEl = document.getElementById(ids.paceNote);
+      const msg = paceMessage(block, periodNoun);
+      if (msg) {
+        noteEl.style.display = 'block';
+        noteEl.className = 'hero-secondary-pace ' + msg.state;
+        noteEl.textContent = msg.state === 'onpace'
+          ? 'On pace to hit target'
+          : `Need ${fmtMoney(block.catchUp.perWorkingDay)}/working day to catch up`;
+      } else {
+        noteEl.style.display = 'none';
+      }
+    }
+    secondary(t.monthly, { value: 'monthValue', pctLine: 'monthPctLine', badge: 'monthBadge', fill: 'monthMeterFill', paceNote: 'monthPaceNote', glowWrap: 'monthGlowWrap', tile: 'monthTile' },
+      `${fmtRange(data.mtd.start, data.mtd.end)} (MTD)`, 'month');
+    secondary(t.yearly, { value: 'yearValue', pctLine: 'yearPctLine', badge: 'yearBadge', fill: 'yearTargetMeterFill', paceNote: 'yearPaceNote', glowWrap: 'yearGlowWrap', tile: 'yearTile' },
+      `${fmtRange(data.ytd.start, data.ytd.end)} (YTD)`, 'year');
+
+    document.getElementById('targetFootnote').textContent =
+      `Monthly and yearly targets: $${t.monthly.target.toLocaleString()} and $${t.yearly.target.toLocaleString()}.`;
+
+    // Full breakdown lives in the dedicated Month pacing / Year to date
+    // sections further down (renderPacing) — the hero tiles above only
+    // need the short version.
+    renderPaceCallout('monthPaceCallout', t.monthly, 'month');
+    renderPaceCallout('yearPaceCallout', t.yearly, 'year');
+  }
+
+  function renderPaceCallout(elId, block, periodNoun) {
+    const el = document.getElementById(elId);
+    const msg = paceMessage(block, periodNoun);
+    if (!msg) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.className = 'pace-callout ' + msg.state;
+    el.innerHTML = msg.html;
+  }
+
+  function renderKPIs(data) {
+    document.getElementById('todayValue').textContent = fmtMoney(data.today.value);
+    document.getElementById('todayCount').textContent = `${data.today.count} deal${data.today.count === 1 ? '' : 's'}`;
+    document.getElementById('yesterdayValue').textContent = fmtMoney(data.yesterday.value);
+    document.getElementById('yesterdayCount').textContent = `${data.yesterday.count} deal${data.yesterday.count === 1 ? '' : 's'}`;
+    document.getElementById('weekValue').textContent = fmtMoney(data.thisWeek.value);
+    document.getElementById('weekCount').textContent = `${data.thisWeek.count} deals · Sun–today`;
+    document.getElementById('lastWeekValue').textContent = fmtMoney(data.lastWeek.value);
+    document.getElementById('lastWeekCount').textContent = `${data.lastWeek.count} deals · full week`;
+
+    const todayDeltaEl = document.getElementById('todayDelta');
+    if (data.todayVsYesterdayPct == null) {
+      todayDeltaEl.innerHTML = '&nbsp;';
+    } else {
+      const up = data.todayVsYesterdayPct >= 0;
+      todayDeltaEl.innerHTML = `<span class="arrow">${up ? '↑' : '↓'}</span><span><strong>${fmtPct(data.todayVsYesterdayPct)} ${up ? 'higher' : 'lower'}</strong> than yesterday</span>`;
+    }
+    const weekDeltaEl = document.getElementById('weekDelta');
+    if (data.weekVsLastWeekPct == null) {
+      weekDeltaEl.innerHTML = '&nbsp;';
+    } else {
+      const up = data.weekVsLastWeekPct >= 0;
+      weekDeltaEl.innerHTML = `<span class="arrow">${up ? '↑' : '↓'}</span><span><strong>${fmtPct(data.weekVsLastWeekPct)} ${up ? 'higher' : 'lower'}</strong> than last week</span>`;
+    }
+  }
+
+  function renderCompare(data) {
+    document.getElementById('mtdLabel').textContent = `${fmtRange(data.mtd.start, data.mtd.end)} (MTD)`;
+    document.getElementById('mtdValue').textContent = fmtMoney(data.mtd.value);
+    document.getElementById('mtdCount').textContent = `${data.mtd.count} deals`;
+    document.getElementById('mtdAvg').textContent = `Avg deal: ${fmtMoney(data.mtd.avgDeal)}`;
+
+    document.getElementById('lastMonthSameLabel').textContent = `${fmtRange(data.lastMonthSamePeriod.start, data.lastMonthSamePeriod.end)} (same period)`;
+    document.getElementById('lastMonthSameValue').textContent = fmtMoney(data.lastMonthSamePeriod.value);
+    document.getElementById('lastMonthSameCount').textContent = `${data.lastMonthSamePeriod.count} deals`;
+    document.getElementById('lastMonthSameAvg').textContent = `Avg deal: ${fmtMoney(data.lastMonthSamePeriod.avgDeal)}`;
+
+    const arrowEl = document.getElementById('mtdDeltaArrow');
+    if (data.mtdVsLastMonthPct == null) {
+      arrowEl.textContent = '—';
+    } else {
+      const up = data.mtdVsLastMonthPct >= 0;
+      arrowEl.textContent = `${up ? '↑' : '↓'} ${fmtPct(data.mtdVsLastMonthPct)}`;
+    }
+
+    const avgUp = (data.avgDealVsLastMonthPct || 0) >= 0;
+    const avgPctText = data.avgDealVsLastMonthPct == null ? '' :
+      ` Average deal size is ${avgUp ? 'up' : 'down'} <strong>${fmtPct(data.avgDealVsLastMonthPct)}</strong> MTD (${fmtMoney(data.mtd.avgDeal)}) vs. the same period last month (${fmtMoney(data.lastMonthSamePeriod.avgDeal)}).`;
+    document.getElementById('compareFootnote').innerHTML =
+      `Full last month (${fmtRange(data.fullLastMonth.start, data.fullLastMonth.end)}): <strong>${fmtMoney(data.fullLastMonth.value)}</strong> across <strong>${data.fullLastMonth.count} deals</strong> — for reference against this month's projected total below.${avgPctText}`;
+  }
+
+  function renderChart(data) {
+    const svg = document.getElementById('barChart');
+    const tooltip = document.getElementById('tooltip');
+    svg.innerHTML = '';
+
+    const days = data.dailySeries;
+    document.getElementById('chartLabel').textContent =
+      `Daily sales — ${MONTHS[parseDateStr(data.mtd.start).getUTCMonth()]} ${parseDateStr(data.mtd.start).getUTCFullYear()}`;
+
+    const W = 704, H = 200;
+    const padLeft = 44, padRight = 8, padTop = 22, padBottom = 22;
+    const plotW = W - padLeft - padRight;
+    const plotH = H - padTop - padBottom;
+
+    const peak = days.reduce((m, d) => Math.max(m, d.value), 0);
+    // clean round ceiling above the peak: step by 25K under 200K, 50K under 1M, else 100K
+    const step = peak < 200000 ? 25000 : peak < 1000000 ? 50000 : 100000;
+    const yMax = Math.max(step, Math.ceil((peak * 1.08) / step) * step);
+    const yTicks = [0, yMax / 3, (yMax / 3) * 2, yMax].map(v => Math.round(v / (step / 5)) * (step / 5));
+
+    function yFor(v) { return padTop + plotH - (v / yMax) * plotH; }
+
+    [0, yMax * 0.5, yMax].forEach(t => {
+      const y = yFor(t);
+      svg.appendChild(el('line', { x1: padLeft, x2: W - padRight, y1: y, y2: y, class: 'gridline-el' }));
+      const label = el('text', { x: padLeft - 8, y: y + 3, 'text-anchor': 'end', class: 'axis-label' });
+      label.textContent = t === 0 ? '$0' : `$${Math.round(t / 1000)}K`;
+      svg.appendChild(label);
+    });
+
+    const n = days.length || 1;
+    const slot = plotW / n;
+    const barW = Math.min(24, slot * 0.55);
+    const peakIdx = days.reduce((best, d, i) => (d.value > (days[best] ? days[best].value : -1) ? i : best), 0);
+
+    days.forEach((d, i) => {
+      const cx = padLeft + slot * i + slot / 2;
+      const x = cx - barW / 2;
+      const y = yFor(d.value);
+      const h = (padTop + plotH) - y;
+      const isToday = !!d.today;
+      const isPeak = i === peakIdx;
+
+      svg.appendChild(el('rect', {
+        x: x, y: h > 0 ? y : padTop + plotH,
+        width: barW, height: Math.max(h, 0),
+        rx: 4, ry: 4,
+        class: isToday ? 'bar-accent' : (isPeak ? 'bar-peak' : 'bar'),
+      }));
+
+      const dayNum = parseDateStr(d.date).getUTCDate();
+      svg.appendChild(el('text', { x: cx, y: H - 4, 'text-anchor': 'middle', class: 'day-label' })).textContent = dayNum;
+
+      if (isPeak || isToday) {
+        const lbl = el('text', {
+          x: cx, y: y - 6, 'text-anchor': 'middle',
+          class: isToday ? 'bar-val-label-accent' : 'bar-val-label',
+        });
+        lbl.textContent = '$' + Math.round(d.value / 1000) + 'K';
+        svg.appendChild(lbl);
+      }
+
+      const hit = el('rect', { x: padLeft + slot * i, y: padTop, width: slot, height: plotH, fill: 'transparent', style: 'cursor:pointer' });
+      hit.addEventListener('mouseenter', () => {
+        const rect2 = svg.getBoundingClientRect();
+        const scaleX = rect2.width / W;
+        tooltip.style.left = (rect2.left + cx * scaleX) + 'px';
+        tooltip.style.top = (rect2.top + Math.max(y, padTop) - 8 + window.scrollY) + 'px';
+        tooltip.textContent = `${fmtShortDate(d.date)}${isToday ? ' (so far)' : ''}: ${fmtMoney(d.value)} · ${d.count} deal${d.count === 1 ? '' : 's'}`;
+        tooltip.style.opacity = 1;
+      });
+      hit.addEventListener('mouseleave', () => { tooltip.style.opacity = 0; });
+      svg.appendChild(hit);
+    });
+
+    const peakDay = days[peakIdx];
+    document.getElementById('chartFootnote').textContent = peakDay
+      ? `Bars show won-opportunity value by the deal's Won Date. Today (${fmtShortDate(data.today.date)}) is in progress — updates on refresh. Peak day: ${fmtShortDate(peakDay.date)} (${fmtMoney(peakDay.value)}).`
+      : 'No sales recorded yet this month.';
+  }
+
+  // ---- monthly trend chart: one bar per month, click to drill into that
+  // month's full detail view (reuses the same historical/custom-range
+  // machinery as the "Viewing" picker's presets). ----
+
+  function buildMonthlySeries(data, trailingMonths) {
+    const daily = data.salesDaily || {};
+    const byMonth = new Map();
+    for (const dateStr in daily) {
+      const mKey = dateStr.slice(0, 7);
+      if (!byMonth.has(mKey)) byMonth.set(mKey, { value: 0, count: 0 });
+      const agg = byMonth.get(mKey);
+      agg.value += daily[dateStr].total;
+      agg.count += daily[dateStr].count;
+    }
+    const todayMonth = data.today.date.slice(0, 7);
+    if (!byMonth.has(todayMonth)) byMonth.set(todayMonth, { value: 0, count: 0 });
+
+    const months = [...byMonth.keys()].sort().slice(-trailingMonths);
+    return months.map((mKey) => {
+      const agg = byMonth.get(mKey);
+      const start = mKey + '-01';
+      const isCurrent = mKey === todayMonth;
+      return {
+        monthKey: mKey,
+        start,
+        end: isCurrent ? data.today.date : endOfMonthStr(start),
+        value: Math.round(agg.value * 100) / 100,
+        count: agg.count,
+        isCurrent,
+        label: MONTHS[Number(mKey.slice(5, 7)) - 1],
+      };
+    });
+  }
+
+  function openMonthDetail(mo) {
+    periodPickerEl.value = 'custom';
+    document.getElementById('periodCustomStart').value = mo.start;
+    document.getElementById('periodCustomEnd').value = mo.end;
+    switchToHistorical();
+    document.getElementById('periodPicker').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderMonthlyChart(data) {
+    const svg = document.getElementById('monthlyBarChart');
+    const tooltip = document.getElementById('tooltip');
+    svg.innerHTML = '';
+
+    const months = buildMonthlySeries(data, 12);
+    const W = 704, H = 200;
+    const padLeft = 44, padRight = 8, padTop = 22, padBottom = 22;
+    const plotW = W - padLeft - padRight;
+    const plotH = H - padTop - padBottom;
+
+    const peak = months.reduce((m, d) => Math.max(m, d.value), 0);
+    const { yMax, ticks } = computeNiceYMax(peak);
+    function yFor(v) { return padTop + plotH - (v / yMax) * plotH; }
+
+    ticks.forEach((t) => {
+      const y = yFor(t);
+      svg.appendChild(el('line', { x1: padLeft, x2: W - padRight, y1: y, y2: y, class: 'gridline-el' }));
+      const label = el('text', { x: padLeft - 8, y: y + 3, 'text-anchor': 'end', class: 'axis-label' });
+      label.textContent = t === 0 ? '$0' : `$${Math.round(t / 1000)}K`;
+      svg.appendChild(label);
+    });
+
+    const n = months.length || 1;
+    const slot = plotW / n;
+    const barW = Math.min(40, slot * 0.55);
+    const peakIdx = months.reduce((best, d, i) => (d.value > (months[best] ? months[best].value : -1) ? i : best), 0);
+    const spansYearBoundary = months.length > 0 && months[0].monthKey.slice(0, 4) !== months[months.length - 1].monthKey.slice(0, 4);
+
+    months.forEach((mo, i) => {
+      const cx = padLeft + slot * i + slot / 2;
+      const x = cx - barW / 2;
+      const y = yFor(mo.value);
+      const h = (padTop + plotH) - y;
+      const isPeak = i === peakIdx && mo.value > 0;
+
+      svg.appendChild(el('rect', {
+        x: x, y: h > 0 ? y : padTop + plotH,
+        width: barW, height: Math.max(h, 0),
+        rx: 4, ry: 4,
+        class: mo.isCurrent ? 'bar-accent' : (isPeak ? 'bar-peak' : 'bar'),
+      }));
+
+      const showYear = spansYearBoundary && (i === 0 || months[i - 1].monthKey.slice(0, 4) !== mo.monthKey.slice(0, 4));
+      const dayLbl = el('text', { x: cx, y: H - 4, 'text-anchor': 'middle', class: 'day-label' });
+      dayLbl.textContent = showYear ? `${mo.label} '${mo.monthKey.slice(2, 4)}` : mo.label;
+      svg.appendChild(dayLbl);
+
+      if (isPeak || mo.isCurrent) {
+        const lbl = el('text', {
+          x: cx, y: y - 6, 'text-anchor': 'middle',
+          class: mo.isCurrent ? 'bar-val-label-accent' : 'bar-val-label',
+        });
+        lbl.textContent = '$' + Math.round(mo.value / 1000) + 'K';
+        svg.appendChild(lbl);
+      }
+
+      const hit = el('rect', { x: padLeft + slot * i, y: padTop, width: slot, height: plotH, fill: 'transparent', style: 'cursor:pointer' });
+      hit.addEventListener('mouseenter', () => {
+        const rect2 = svg.getBoundingClientRect();
+        const scaleX = rect2.width / W;
+        tooltip.style.left = (rect2.left + cx * scaleX) + 'px';
+        tooltip.style.top = (rect2.top + Math.max(y, padTop) - 8 + window.scrollY) + 'px';
+        const monthYear = `${mo.label} ${mo.monthKey.slice(0, 4)}`;
+        tooltip.textContent = `${monthYear}${mo.isCurrent ? ' (so far)' : ''}: ${fmtMoney(mo.value)} · ${mo.count} deal${mo.count === 1 ? '' : 's'} — click for details`;
+        tooltip.style.opacity = 1;
+      });
+      hit.addEventListener('mouseleave', () => { tooltip.style.opacity = 0; });
+      hit.addEventListener('click', () => openMonthDetail(mo));
+      svg.appendChild(hit);
+    });
+
+    document.getElementById('monthlyChartFootnote').textContent =
+      `Trailing ${months.length} months, by Won Date — click any bar to see that month's full total, rep leaderboard, and day-by-day breakdown. The current month (highlighted) is still in progress.`;
+  }
+
+  function renderPacing(data) {
+    const mp = data.monthPacing;
+    document.getElementById('monthPacingFraction').innerHTML = `<strong>${mp.workingDaysElapsed} of ${mp.workingDaysTotal}</strong> working days elapsed`;
+    requestAnimationFrame(() => {
+      document.getElementById('meterFill').style.width = Math.round((mp.workingDaysElapsed / mp.workingDaysTotal) * 100) + '%';
+    });
+    document.getElementById('monthDaysLeft').textContent = mp.workingDaysLeft;
+    document.getElementById('monthAvgDay').textContent = fmtMoney(mp.avgPerWorkingDay);
+    document.getElementById('monthProjected').textContent = fmtMoney(mp.projectedTotal);
+    const mvEl = document.getElementById('monthVsLast');
+    if (mp.vsLastMonthPct == null) { mvEl.textContent = '—'; }
+    else { mvEl.textContent = `${mp.vsLastMonthPct >= 0 ? '↑' : '↓'} ${fmtPct(mp.vsLastMonthPct)}`; }
+
+    document.getElementById('ytdLabel').textContent = `${fmtRange(data.ytd.start, data.ytd.end)}, ${parseDateStr(data.ytd.end).getUTCFullYear()}`;
+    document.getElementById('ytdValue').textContent = fmtMoney(data.ytd.value);
+    document.getElementById('ytdCount').textContent = `${data.ytd.count} deals`;
+    document.getElementById('ytdAvg').textContent = `Avg deal: ${fmtMoney(data.ytd.avgDeal)}`;
+
+    const yp = data.yearPacing;
+    document.getElementById('yearPacingFraction').innerHTML = `<strong>${yp.workingDaysElapsed} of ${yp.workingDaysTotal}</strong> working days elapsed`;
+    requestAnimationFrame(() => {
+      document.getElementById('yearMeterFill').style.width = Math.round((yp.workingDaysElapsed / yp.workingDaysTotal) * 100) + '%';
+    });
+    document.getElementById('yearDaysLeft').textContent = yp.workingDaysLeft;
+    document.getElementById('yearAvgDay').textContent = fmtMoney(yp.avgPerWorkingDay);
+    document.getElementById('yearProjected').textContent = fmtMoney(yp.projectedTotal);
+    document.getElementById('yearPctElapsed').textContent = Math.round((yp.workingDaysElapsed / yp.workingDaysTotal) * 100) + '%';
+  }
+
+  function renderLbRowsInto(containerEl, rows) {
+    containerEl.innerHTML = '';
+    if (!rows.length) {
+      containerEl.innerHTML = '<div class="lb-empty">No won opportunities in this period yet.</div>';
+      return;
+    }
+    const maxTotal = Math.max(...rows.map(r => r.total));
+    rows.forEach((r, i) => {
+      const pct = Math.max((r.total / maxTotal) * 100, 1.5);
+      const row = document.createElement('div');
+      row.className = 'lb-row';
+      row.innerHTML = `
+        <div class="lb-rank${i === 0 ? ' lb-rank-1' : ''}">${i + 1}</div>
+        <div class="lb-name" title="${r.name}">${r.name}</div>
+        <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${pct}%"></div></div>
+        <div class="lb-vals">
+          <div class="lb-value">${fmtMoney(r.total)}</div>
+          <div class="lb-count">${r.count} deal${r.count === 1 ? '' : 's'}</div>
+        </div>`;
+      containerEl.appendChild(row);
+    });
+
+    const grandTotal = rows.reduce((s, r) => s + r.total, 0);
+    const grandCount = rows.reduce((s, r) => s + r.count, 0);
+    const totalRow = document.createElement('div');
+    totalRow.className = 'lb-grand-row';
+    totalRow.innerHTML = `
+      <div class="lb-grand-label">Total</div>
+      <div><span class="lb-grand-value">${fmtMoney(grandTotal)}</span><span class="lb-grand-count">${grandCount} deal${grandCount === 1 ? '' : 's'}</span></div>`;
+    containerEl.appendChild(totalRow);
+  }
+
+  function renderLeaderboard(data, period) {
+    currentLbPeriod = period;
+    const rows = data.leaderboard[period] || [];
+    const rangeLabel = period === 'week' ? `${fmtRange(data.thisWeek.start, data.thisWeek.end)} (this week)`
+      : period === 'month' ? `${fmtRange(data.mtd.start, data.mtd.end)} (MTD)`
+      : `${fmtRange(data.ytd.start, data.ytd.end)} (YTD)`;
+    document.getElementById('lbRange').textContent = rangeLabel;
+    renderLbRowsInto(document.getElementById('lbRows'), rows);
+  }
+
+  function renderAll(data) {
+    latestData = data;
+    renderHeader(data);
+    renderTargets(data);
+    renderKPIs(data);
+    renderCompare(data);
+    renderChart(data);
+    renderMonthlyChart(data);
+    renderPacing(data);
+    renderLeaderboard(data, currentLbPeriod);
+    // If a historical period is currently open, live-refresh it too — the
+    // underlying salesDaily rollup just changed.
+    if (periodPickerEl.value !== 'current') renderHistorical();
+  }
+
+  // ---- historical period picker: presets + custom range, sliced from data.salesDaily ----
+
+  const periodPickerEl = document.getElementById('periodPicker');
+  const liveViewEl = document.getElementById('liveView');
+  const historicalViewEl = document.getElementById('historicalView');
+
+  function periodPresetRange(preset) {
+    if (!latestData) return null;
+    const today = latestData.today.date; // 'YYYY-MM-DD', already computed server-side in the dashboard's TZ
+    switch (preset) {
+      case 'thisWeek': return [startOfWeekSun(today), today];
+      case 'lastWeek': { const s = addDaysStr(startOfWeekSun(today), -7); return [s, addDaysStr(s, 6)]; }
+      case 'thisMonth': return [startOfMonthStr(today), today];
+      case 'lastMonth': { const s = startOfMonthStr(addDaysStr(startOfMonthStr(today), -1)); return [s, endOfMonthStr(s)]; }
+      case 'thisYear': return [startOfYearStr(today), today];
+      default: return null; // 'custom' — read from the date inputs
+    }
+  }
+
+  function currentPeriodRange() {
+    const sel = periodPickerEl.value;
+    if (sel === 'custom') {
+      const s = document.getElementById('periodCustomStart').value;
+      const e = document.getElementById('periodCustomEnd').value;
+      if (!s || !e || s > e) return null;
+      return [s, e];
+    }
+    return periodPresetRange(sel);
+  }
+
+  function daysBetween(start, end) {
+    return Math.round((parseDateStr(end) - parseDateStr(start)) / 86400000) + 1;
+  }
+
+  // Sum data.salesDaily over [start, end] inclusive -> { total, count, byRep }
+  function sumSalesRange(daily, start, end) {
+    let total = 0, count = 0;
+    const byRep = {};
+    for (const date in daily) {
+      if (date < start || date > end) continue;
+      const day = daily[date];
+      total += day.total;
+      count += day.count;
+      for (const rep in day.byRep) {
+        if (!byRep[rep]) byRep[rep] = { total: 0, count: 0 };
+        byRep[rep].total += day.byRep[rep].total;
+        byRep[rep].count += day.byRep[rep].count;
+      }
+    }
+    return { total: Math.round(total * 100) / 100, count, byRep };
+  }
+
+  function buildHistChartSeries(daily, start, end) {
+    const days = [];
+    for (let d = start; d <= end; d = addDaysStr(d, 1)) {
+      const day = daily[d] || { total: 0, count: 0 };
+      days.push({ date: d, value: day.total, count: day.count });
+    }
+    if (days.length <= 45) {
+      return days.map(d => ({ date: d.date, v: d.value, n: d.count, dayLabel: String(Number(d.date.slice(8, 10))) }));
+    }
+    // Longer ranges (This year, a wide custom range) get monthly bars instead of one razor-thin bar per day.
+    const byMonth = new Map();
+    for (const d of days) {
+      const mKey = d.date.slice(0, 7);
+      if (!byMonth.has(mKey)) byMonth.set(mKey, { total: 0, count: 0 });
+      const agg = byMonth.get(mKey);
+      agg.total += d.value;
+      agg.count += d.count;
+    }
+    return [...byMonth.entries()].map(([mKey, agg]) => ({
+      date: mKey + '-01', v: agg.total, n: agg.count, dayLabel: MONTHS[Number(mKey.slice(5, 7)) - 1],
+    }));
+  }
+
+  function buildHistLeaderboard(byRep, repsMap) {
+    return Object.entries(byRep)
+      .map(([id, agg]) => ({ name: id === 'UNASSIGNED' ? 'Unassigned' : ((repsMap && repsMap[id]) || id), total: agg.total, count: agg.count }))
+      .sort((a, b) => b.total - a.total);
+  }
+
+  function computeNiceYMax(peak) {
+    if (!peak || peak <= 0) return { yMax: 1000, ticks: [0, 500, 1000] };
+    const target = peak * 1.15;
+    const exp = Math.floor(Math.log10(target));
+    const base = Math.pow(10, exp);
+    const norm = target / base;
+    let niceNorm;
+    if (norm <= 1) niceNorm = 1;
+    else if (norm <= 1.5) niceNorm = 1.5;
+    else if (norm <= 2) niceNorm = 2;
+    else if (norm <= 2.5) niceNorm = 2.5;
+    else if (norm <= 5) niceNorm = 5;
+    else if (norm <= 7.5) niceNorm = 7.5;
+    else niceNorm = 10;
+    return { yMax: niceNorm * base, ticks: [0, (niceNorm * base) / 2, niceNorm * base] };
+  }
+
+  function renderHistBarChart(days) {
+    const svg = document.getElementById('histBarChart');
+    svg.innerHTML = '';
+    const W = 704, H = 200;
+    const padLeft = 44, padRight = 8, padTop = 22, padBottom = 22;
+    const plotW = W - padLeft - padRight;
+    const plotH = H - padTop - padBottom;
+
+    const peak = Math.max(...days.map(d => d.v), 0);
+    const { yMax, ticks } = computeNiceYMax(peak);
+    function yFor(v) { return padTop + plotH - (v / yMax) * plotH; }
+
+    ticks.forEach(t => {
+      const y = yFor(t);
+      svg.appendChild(el('line', { x1: padLeft, x2: W - padRight, y1: y, y2: y, class: 'gridline-el' }));
+      const label = el('text', { x: padLeft - 8, y: y + 3, 'text-anchor': 'end', class: 'axis-label' });
+      label.textContent = t === 0 ? '$0' : `$${Math.round(t / 1000)}K`;
+      svg.appendChild(label);
+    });
+
+    const n = days.length;
+    const slot = plotW / n;
+    const barW = Math.min(24, slot * 0.55);
+    const peakIdx = days.reduce((best, d, i) => (d.v > days[best].v ? i : best), 0);
+
+    days.forEach((d, i) => {
+      const cx = padLeft + slot * i + slot / 2;
+      const x = cx - barW / 2;
+      const y = yFor(d.v);
+      const h = (padTop + plotH) - y;
+      const isPeak = i === peakIdx && d.v > 0;
+
+      svg.appendChild(el('rect', {
+        x: x, y: h > 0 ? y : padTop + plotH,
+        width: barW, height: Math.max(h, 0),
+        rx: 4, ry: 4,
+        class: isPeak ? 'bar-peak' : 'bar',
+      }));
+
+      svg.appendChild(el('text', { x: cx, y: H - 4, 'text-anchor': 'middle', class: 'day-label' })).textContent = d.dayLabel;
+
+      if (isPeak) {
+        const lbl = el('text', { x: cx, y: y - 6, 'text-anchor': 'middle', class: 'bar-val-label' });
+        lbl.textContent = d.v >= 1000 ? '$' + Math.round(d.v / 1000) + 'K' : '$' + Math.round(d.v);
+        svg.appendChild(lbl);
+      }
+
+      const hit = el('rect', { x: padLeft + slot * i, y: padTop, width: slot, height: plotH, fill: 'transparent', style: 'cursor:pointer' });
+      hit.addEventListener('mouseenter', () => {
+        const rect2 = svg.getBoundingClientRect();
+        const scaleX = rect2.width / W;
+        const tooltipEl = document.getElementById('tooltip');
+        tooltipEl.style.left = (rect2.left + cx * scaleX) + 'px';
+        tooltipEl.style.top = (rect2.top + Math.max(y, padTop) - 8 + window.scrollY) + 'px';
+        tooltipEl.textContent = `${d.date}: ${fmtMoney(d.v)} · ${d.n} deal${d.n === 1 ? '' : 's'}`;
+        tooltipEl.style.opacity = 1;
+      });
+      hit.addEventListener('mouseleave', () => { document.getElementById('tooltip').style.opacity = 0; });
+      svg.appendChild(hit);
+    });
+  }
+
+  const PERIOD_PRESET_LABELS = {
+    thisWeek: 'This week', lastWeek: 'Last week',
+    thisMonth: 'This month', lastMonth: 'Last month',
+    thisYear: 'This year', custom: 'Custom range',
+  };
+
+  // Which kind of target-bearing period a [start, end] range actually is —
+  // detected from the DATES, not the preset dropdown value, so this also
+  // covers a month clicked directly from the Monthly Trend chart (which sets
+  // the picker to "custom" under the hood but selects dates that exactly
+  // span a calendar month). `current: true` means the period is still in
+  // progress (matches one of the live hero tiles above); `current: false`
+  // means it's a fully-elapsed past week/month with nothing left to catch up.
+  function detectPeriodKind(start, end) {
+    if (!latestData) return null;
+    const today = latestData.today.date;
+    if (start === startOfWeekSun(start)) {
+      if (start === startOfWeekSun(today) && end === today) return { unit: 'week', current: true };
+      const sat = addDaysStr(start, 6);
+      if (end === sat && end < today) return { unit: 'week', current: false };
+    }
+    if (start === startOfMonthStr(start)) {
+      if (start === startOfMonthStr(today) && end === today) return { unit: 'month', current: true };
+      if (end === endOfMonthStr(start) && end < today) return { unit: 'month', current: false };
+    }
+    if (start === startOfYearStr(today) && end === today) return { unit: 'year', current: true };
+    return null; // an arbitrary custom range has no fixed target to compare against
+  }
+
+  function periodTargetForKind(unit) {
+    if (!latestData) return null;
+    if (unit === 'week') return { value: latestData.targets.weekly.target, noun: 'weekly', block: latestData.targets.weekly };
+    if (unit === 'month') return { value: latestData.targets.monthly.target, noun: 'monthly', block: latestData.targets.monthly };
+    if (unit === 'year') return { value: latestData.targets.yearly.target, noun: 'yearly', block: latestData.targets.yearly };
+    return null;
+  }
+
+  function pctChangeClient(current, previous) {
+    if (!previous) return null;
+    return ((current - previous) / previous) * 100;
+  }
+
+  function renderHistorical(userInitiated) {
+    const preset = periodPickerEl.value;
+    document.getElementById('periodCustomDates').classList.toggle('visible', preset === 'custom');
+
+    const range = currentPeriodRange();
+    if (!range) {
+      document.getElementById('histLabel').textContent = 'Pick a start and end date above.';
+      document.getElementById('histTargetCallout').style.display = 'none';
+      document.getElementById('histGlowWrap').classList.remove('status-on', 'status-off');
+      document.getElementById('histHeaderSection').classList.remove('status-on', 'status-off');
+      return;
+    }
+    const [start, end] = range;
+    const daily = (latestData && latestData.salesDaily) || {};
+    const cur = sumSalesRange(daily, start, end);
+    const avgDeal = cur.count ? cur.total / cur.count : 0;
+
+    // "vs. the period immediately before this one, same length" — works
+    // the same way for every preset AND a custom range, no special-casing.
+    const spanDays = daysBetween(start, end);
+    const prevEnd = addDaysStr(start, -1);
+    const prevStart = addDaysStr(prevEnd, -(spanDays - 1));
+    const prev = sumSalesRange(daily, prevStart, prevEnd);
+    const prevAvgDeal = prev.count ? prev.total / prev.count : 0;
+
+    const presetLabel = PERIOD_PRESET_LABELS[preset] || 'Selected range';
+    const rangeText = `${fmtRange(start, end)}, ${parseDateStr(end).getUTCFullYear()}`;
+    document.getElementById('histLabel').textContent = `${presetLabel} (${rangeText})`;
+    document.getElementById('histTotal').textContent = fmtMoney(cur.total);
+    document.getElementById('histCount').textContent = `${cur.count} deal${cur.count === 1 ? '' : 's'}`;
+    document.getElementById('histAvg').textContent = fmtMoneyAbs(avgDeal);
+
+    const compareEl = document.getElementById('histCompareLine');
+    if (prev.count) {
+      const totalPct = pctChangeClient(cur.total, prev.total);
+      const avgPct = pctChangeClient(avgDeal, prevAvgDeal);
+      const totalArrow = totalPct == null ? '' : (totalPct >= 0 ? '↑' : '↓');
+      const avgArrow = avgPct == null ? '' : (avgPct >= 0 ? '↑' : '↓');
+      compareEl.innerHTML = `vs. the ${spanDays}-day period right before this one (${fmtMoney(prev.total)}, ${prev.count} deal${prev.count === 1 ? '' : 's'}): ` +
+        `total ${totalArrow} <strong>${fmtPct(totalPct)}</strong> &nbsp;·&nbsp; avg deal ${avgArrow} <strong>${fmtPct(avgPct)}</strong> (${fmtMoneyAbs(prevAvgDeal)})`;
+    } else {
+      compareEl.textContent = 'No deals in the equivalent prior period to compare against.';
+    }
+
+    const calloutEl = document.getElementById('histTargetCallout');
+    const headlineEl = document.getElementById('histTargetHeadline');
+    const detailEl = document.getElementById('histTargetDetail');
+    const glowWrap = document.getElementById('histGlowWrap');
+    const headerEl = document.getElementById('histHeaderSection');
+    const periodKind = detectPeriodKind(start, end);
+    const target = periodKind ? periodTargetForKind(periodKind.unit) : null;
+    if (target && target.value) {
+      calloutEl.style.display = 'block';
+      // Tracked per exact date range (not just per preset), so a specific past
+      // month/week clicked from the Monthly Trend chart is remembered on its
+      // own — flipping between two different reached months doesn't get
+      // confused with revisiting the same one.
+      const stateKey = `${periodKind.unit}:${start}:${end}`;
+      const wasReachedBefore = !!histReachedState[stateKey];
+      // A click/selection always celebrates a reached period; only a silent
+      // background refresh (the page's own 5-min auto-refresh re-rendering
+      // whatever period happens to be open) is limited to celebrating once,
+      // on the transition into "reached" — so it doesn't re-fire confetti
+      // every few minutes while you're just sitting on an already-reached period.
+      const shouldCelebrate = userInitiated || !wasReachedBefore;
+
+      if (periodKind.current) {
+        // This period is still in progress (This week / This month / This year) —
+        // reuse the exact same target block (reached/onPace/catchUp) that drives
+        // the live hero tiles above, so the language and glow logic matches
+        // exactly: green + confetti once actually reached, green (no confetti)
+        // while merely on pace, red with a catch-up ask once behind pace — never
+        // "missed", since the period hasn't ended yet.
+        const block = target.block;
+        const on = block.reached || block.onPace;
+        calloutEl.className = 'pace-callout ' + (on ? 'onpace' : 'behind');
+        glowWrap.classList.toggle('status-on', on);
+        glowWrap.classList.toggle('status-off', !on);
+        headerEl.classList.toggle('status-on', on);
+        headerEl.classList.toggle('status-off', !on);
+        histReachedState[stateKey] = block.reached;
+        if (block.reached) {
+          headlineEl.textContent = 'Target reached';
+          detailEl.textContent = ` — ${fmtMoneyAbs(block.diff)} over the ${fmtMoney(target.value)} ${target.noun} target`;
+          if (shouldCelebrate) launchConfetti(document.getElementById('histHeaderSection'));
+        } else if (block.onPace) {
+          headlineEl.textContent = 'On pace to hit target';
+          detailEl.textContent = '';
+        } else {
+          headlineEl.textContent = 'Not on pace for target';
+          const c = block.catchUp;
+          detailEl.textContent = c
+            ? ` — need ${fmtMoney(c.perWorkingDay)}/working day for the rest of the ${target.noun.replace('ly', '')} to close the ${fmtMoney(c.remaining)} gap`
+            : ` — ${fmtMoneyAbs(target.value - cur.total)} short of the ${fmtMoney(target.value)} ${target.noun} target`;
+        }
+      } else {
+        // A fully-elapsed past period (a prior week or month) — there's no
+        // time left in it to catch up, so it's a plain binary hit-or-miss.
+        const reached = cur.total >= target.value;
+        calloutEl.className = 'pace-callout ' + (reached ? 'onpace' : 'behind');
+        glowWrap.classList.toggle('status-on', reached);
+        glowWrap.classList.toggle('status-off', !reached);
+        headerEl.classList.toggle('status-on', reached);
+        headerEl.classList.toggle('status-off', !reached);
+        histReachedState[stateKey] = reached;
+        if (reached) {
+          headlineEl.textContent = 'Target reached';
+          detailEl.textContent = ` — ${fmtMoneyAbs(cur.total - target.value)} over the ${fmtMoney(target.value)} ${target.noun} target`;
+          if (shouldCelebrate) launchConfetti(document.getElementById('histHeaderSection'));
+        } else {
+          headlineEl.textContent = 'Target missed';
+          detailEl.textContent = ` — ${fmtMoneyAbs(target.value - cur.total)} short of the ${fmtMoney(target.value)} ${target.noun} target`;
+        }
+      }
+    } else {
+      calloutEl.style.display = 'none';
+      // custom ranges (or any preset with no defined target) get no glow —
+      // there's nothing to have "hit or missed"
+      glowWrap.classList.remove('status-on', 'status-off');
+      headerEl.classList.remove('status-on', 'status-off');
+    }
+
+    document.getElementById('histChartLabel').textContent = `Daily sales — ${presetLabel}`;
+    renderHistBarChart(buildHistChartSeries(daily, start, end));
+
+    document.getElementById('histLbRange').textContent = rangeText;
+    renderLbRowsInto(document.getElementById('histLbRows'), buildHistLeaderboard(cur.byRep, latestData && latestData.reps));
+  }
+
+  function switchToCurrent() {
+    periodPickerEl.value = 'current';
+    document.getElementById('periodCustomDates').classList.remove('visible');
+    liveViewEl.style.display = '';
+    historicalViewEl.style.display = 'none';
+  }
+
+  function switchToHistorical() {
+    // Always a user click/selection (the dropdown, or a Monthly Trend bar) —
+    // so a reached period always celebrates here, per the "any time you click
+    // on a week or month that hit target" behavior.
+    renderHistorical(true);
+    liveViewEl.style.display = 'none';
+    historicalViewEl.style.display = '';
+  }
+
+  periodPickerEl.addEventListener('change', () => {
+    if (periodPickerEl.value === 'current') switchToCurrent();
+    else switchToHistorical();
+  });
+  document.getElementById('periodCustomStart').addEventListener('change', () => { if (periodPickerEl.value === 'custom') renderHistorical(true); });
+  document.getElementById('periodCustomEnd').addEventListener('change', () => { if (periodPickerEl.value === 'custom') renderHistorical(true); });
+  document.getElementById('histBackBtn').addEventListener('click', switchToCurrent);
+
+  // ---- fetch + refresh loop ----
+
+  async function fetchAndRender(isManual) {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const loadingBanner = document.getElementById('loadingBanner');
+    const errorBanner = document.getElementById('errorBanner');
+    if (isManual) refreshBtn.classList.add('spinning');
+    if (!latestData) loadingBanner.style.display = 'flex';
+
+    try {
+      const res = await fetch('/api/data', { cache: 'no-store' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      errorBanner.classList.remove('error');
+      errorBanner.style.display = 'none';
+      loadingBanner.style.display = 'none';
+      renderAll(data);
+    } catch (err) {
+      loadingBanner.style.display = 'none';
+      errorBanner.textContent = latestData
+        ? `Couldn't refresh (${err.message}) — showing the last successful pull.`
+        : `Couldn't load dashboard data (${err.message}). Check GHL_API_KEY / GHL_LOCATION_ID on the server.`;
+      errorBanner.style.display = 'flex';
+      errorBanner.classList.add('error');
+    } finally {
+      if (isManual) refreshBtn.classList.remove('spinning');
+    }
+  }
+
+  document.getElementById('refreshBtn').addEventListener('click', () => fetchAndRender(true));
+
+  document.getElementById('lbTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.lb-tab');
+    if (!btn || !latestData) return;
+    document.querySelectorAll('#lbTabs .lb-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    renderLeaderboard(latestData, btn.dataset.period);
+  });
+
+  // ---- theme toggle ----
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    const root = document.documentElement;
+    const current = root.getAttribute('data-theme');
+    if (current === 'dark') { root.setAttribute('data-theme', 'light'); }
+    else if (current === 'light') { root.setAttribute('data-theme', 'dark'); }
+    else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', prefersDark ? 'light' : 'dark');
+    }
+  });
+
+  fetchAndRender(false);
+  setInterval(() => fetchAndRender(false), REFRESH_INTERVAL_MS);
+
+  // ---- appointment outcomes section ----
+
+  let apptData = null; // { asOf, tz, fixDate, calendarId, locationId, historyStart, daily, reps }
+
+  function todayStrInTZ(tz) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  }
+  function addDaysStr(dateStr, n) {
+    const d = new Date(`${dateStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+  function dowUTC(dateStr) { return new Date(`${dateStr}T00:00:00Z`).getUTCDay(); }
+  function startOfWeekSun(dateStr) { return addDaysStr(dateStr, -dowUTC(dateStr)); }
+  function startOfMonthStr(dateStr) { return dateStr.slice(0, 7) + '-01'; }
+  function endOfMonthStr(dateStr) {
+    const [y, m] = dateStr.split('-').map(Number);
+    return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  }
+  function startOfYearStr(dateStr) { return dateStr.slice(0, 4) + '-01-01'; }
+
+  function apptPresetRange(preset) {
+    const today = todayStrInTZ((apptData && apptData.tz) || 'America/New_York');
+    switch (preset) {
+      case 'today': return [today, today];
+      case 'yesterday': { const y = addDaysStr(today, -1); return [y, y]; }
+      case 'thisWeek': return [startOfWeekSun(today), today];
+      case 'lastWeek': { const s = addDaysStr(startOfWeekSun(today), -7); return [s, addDaysStr(s, 6)]; }
+      case 'mtd': return [startOfMonthStr(today), today];
+      case 'lastMonth': { const s = startOfMonthStr(addDaysStr(startOfMonthStr(today), -1)); return [s, endOfMonthStr(s)]; }
+      case 'ytd': return [startOfYearStr(today), today];
+      default: return null; // 'custom' — read from the date inputs instead
+    }
+  }
+
+  function currentApptRange() {
+    const sel = document.getElementById('apptRangeSelect').value;
+    if (sel === 'custom') {
+      const s = document.getElementById('apptCustomStart').value;
+      const e = document.getElementById('apptCustomEnd').value;
+      if (!s || !e || s > e) return null;
+      return [s, e];
+    }
+    return apptPresetRange(sel);
+  }
+
+  const APPT_BUCKET_LABELS = { Sold: 'Sold', DNS: 'DNS', NoShow: 'No Show', IncTime: 'Inc. Time', NI: 'Not Interested', NQ: 'Not Qualified', Unresulted: 'Unresulted' };
+  const apptPct = (v) => (v == null ? '—' : (Math.round(v * 1000) / 10) + '%');
+
+  function renderAppointments() {
+    if (!apptData) return;
+    document.getElementById('apptCustomDates').classList.toggle('visible', document.getElementById('apptRangeSelect').value === 'custom');
+
+    const range = currentApptRange();
+    const rangeLabelEl = document.getElementById('apptRangeLabel');
+    if (!range) {
+      rangeLabelEl.textContent = 'Pick a start and end date above.';
+      return;
+    }
+    const [start, end] = range;
+    rangeLabelEl.textContent = start === end ? start : `${start} to ${end}`;
+
+    const { counts, byRep, soldValue, byRepValue } = sumRange(apptData.daily, start, end);
+    const mode = modeForRange(start, apptData.fixDate);
+    const rates = computeRates(counts, mode);
+
+    const badge = document.getElementById('apptModeBadge');
+    badge.textContent = mode === 'full' ? 'Full mode' : 'Modified mode (pre-fix data)';
+    badge.className = 'appt-mode-badge ' + mode;
+
+    const countsRow = document.getElementById('apptCountsRow');
+    countsRow.innerHTML = '';
+    for (const key of ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted']) {
+      const tile = document.createElement('div');
+      tile.className = 'appt-count-tile';
+      tile.innerHTML = `<div class="appt-count-label">${APPT_BUCKET_LABELS[key]}</div><div class="appt-count-value">${counts[key] || 0}</div>`;
+      countsRow.appendChild(tile);
+    }
+
+    const ratesRow = document.getElementById('apptRatesRow');
+    ratesRow.innerHTML = '';
+    const dollarTile = document.createElement('div');
+    dollarTile.className = 'appt-rate-tile';
+    dollarTile.innerHTML = `<div class="appt-rate-label">$ Sold</div><div class="appt-rate-value">${fmtMoney(soldValue)}</div>`;
+    ratesRow.appendChild(dollarTile);
+    const rateTiles = mode === 'full'
+      ? [['Opp rate', rates.oppRate], ['Demo-to-opp rate', rates.demoToOppRate], ['Close rate', rates.closeRate]]
+      : [['Modified demo rate', rates.modifiedDemoRate], ['Modified close rate', rates.modifiedCloseRate]];
+    rateTiles.forEach(([label, v]) => {
+      const tile = document.createElement('div');
+      tile.className = 'appt-rate-tile';
+      tile.innerHTML = `<div class="appt-rate-label">${label}</div><div class="appt-rate-value">${apptPct(v)}</div>`;
+      ratesRow.appendChild(tile);
+    });
+
+    document.getElementById('apptNote').textContent = mode === 'full'
+      ? `Every appointment in this range was resulted after the ${apptData.fixDate} automation fix, so Not Interested / Not Qualified counts are trusted. Unresulted (${counts.Unresulted || 0}) = showed appointments with no usable status yet — excluded from the rates above.`
+      : `This range includes dates before the ${apptData.fixDate} fix, when Not Interested / Not Qualified tagging could delete the opportunity instead of changing its status — those two counts (and the rates above) are best-effort only. Unresulted (${counts.Unresulted || 0}) = showed appointments with no usable status — excluded from the rates above.`;
+
+    renderUnresultedList(start, end);
+
+    const repRowsEl = document.getElementById('apptRepRows');
+    repRowsEl.innerHTML = '';
+    const repList = Object.keys(byRep)
+      .filter((id) => id !== 'unassigned')
+      .map((id) => {
+        const c = byRep[id];
+        const r = computeRates(c, mode);
+        return {
+          name: (apptData.reps && apptData.reps[id]) || id,
+          sold: c.Sold || 0,
+          // Dollar total of this rep's Sold appointments in the period,
+          // attributed by the appointment's own date/rep (see the note on
+          // classifyEvents' `value` field) — not the same attribution as
+          // the sales-$ dashboard above (Won Date/opportunity owner), so
+          // the two totals for the same rep can differ slightly.
+          soldValue: byRepValue[id] || 0,
+          // Appointments = every RESULTED appointment for that rep (Sold +
+          // DNS + No Show + Inc. Time + NI + NQ — same "resulted" total
+          // computeRates uses, and the same one the counts row above sums
+          // to). Excludes Unresulted (no usable status yet), Excluded
+          // (cancelled/invalid), and Upcoming (hasn't happened yet).
+          appointments: r.resulted || 0,
+          // "Estimates sent" = Sold + DNS — both mean a price was actually
+          // given (DNS = estimate given, not yet sold; NI/NQ/No Show/Inc.
+          // Time never got that far, by the classification rules). This is
+          // exactly the denominator "close rate" divides by in both modes,
+          // so the two numbers always reconcile: sold ÷ estimates = close
+          // rate — see the footnote below the table.
+          estimates: (c.Sold || 0) + (c.DNS || 0),
+          // Demo rate = same demo-to-opp / modified-demo-rate formula as
+          // the rate tiles above, scoped to this rep — so it matches the
+          // dashboard-wide definition rather than inventing a rep-only one.
+          demoRate: mode === 'full' ? r.demoToOppRate : r.modifiedDemoRate,
+          closeRate: mode === 'full' ? r.closeRate : r.modifiedCloseRate,
+        };
+      })
+      .filter((r) => r.estimates > 0)
+      .sort((a, b) => b.soldValue - a.soldValue || b.sold - a.sold || b.estimates - a.estimates);
+
+    if (!repList.length) {
+      repRowsEl.innerHTML = '<div class="lb-empty">No estimates sent in this period yet.</div>';
+      return;
+    }
+    const maxValue = Math.max(1, ...repList.map((r) => r.soldValue));
+    repList.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'lb-row';
+      row.innerHTML = `
+        <div class="lb-rank"></div>
+        <div class="lb-name" title="${r.name}">${r.name}</div>
+        <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${Math.max((r.soldValue / maxValue) * 100, 1.5)}%"></div></div>
+        <div class="lb-vals">
+          <div class="lb-value">${fmtMoney(r.soldValue)}</div>
+          <div class="lb-count">${r.sold} sold · ${apptPct(r.closeRate)} close</div>
+          <div class="lb-count">${r.appointments} appts · ${r.estimates} est · ${apptPct(r.demoRate)} demo</div>
+        </div>`;
+      repRowsEl.appendChild(row);
+    });
+  }
+
+  // ---- Unresulted drill-down: which specific appointments need a status, and who's assigned ----
+  let unresultedListOpen = false;
+
+  // Deep link straight to the contact record in GOAT (this location's
+  // white-labeled GoHighLevel CRM) so a rep can open it and result the
+  // appointment / update the opportunity without hunting for it.
+  // Standard (non-whitelabeled) GHL app URL pattern — if GOAT's login lives
+  // at a custom domain instead of app.gohighlevel.com, swap the origin
+  // below to match.
+  function goatContactUrl(contactId) {
+    if (!contactId || !apptData.locationId) return null;
+    return `https://app.gohighlevel.com/v2/location/${apptData.locationId}/contacts/detail/${contactId}`;
+  }
+
+  function renderUnresultedList(start, end) {
+    const toggle = document.getElementById('apptUnresultedToggle');
+    const listEl = document.getElementById('apptUnresultedList');
+    const rows = (apptData.unresulted || []).filter((r) => r.date >= start && r.date <= end);
+
+    if (!rows.length) {
+      toggle.style.display = 'none';
+      listEl.style.display = 'none';
+      listEl.innerHTML = '';
+      return;
+    }
+
+    toggle.style.display = 'inline-flex';
+    toggle.textContent = (unresultedListOpen ? 'Hide' : 'Show') + ` unresulted list (${rows.length})`;
+    listEl.style.display = unresultedListOpen ? 'block' : 'none';
+    if (!unresultedListOpen) return; // skip building the DOM until it's actually opened
+
+    const CAP = 200;
+    listEl.innerHTML = '';
+    rows.slice(0, CAP).forEach((r) => {
+      const repName = (apptData.reps && apptData.reps[r.assignedUserId]) || r.assignedUserId;
+      const row = document.createElement('div');
+      row.className = 'unres-row';
+      const link = goatContactUrl(r.contactId);
+      row.innerHTML = `
+        <div class="unres-date">${r.date} · <span class="unres-rep">${repName}</span></div>
+        <div class="unres-title">${r.title || 'Untitled appointment'}</div>
+        <div class="unres-reason">${r.reason || ''}</div>
+        ${link ? `<a class="unres-link" href="${link}" target="_blank" rel="noopener">Open contact in GOAT to result it →</a>` : ''}`;
+      listEl.appendChild(row);
+    });
+    if (rows.length > CAP) {
+      const note = document.createElement('div');
+      note.className = 'lb-empty';
+      note.textContent = `Showing the most recent ${CAP} of ${rows.length} — narrow the date range to see the rest.`;
+      listEl.appendChild(note);
+    }
+  }
+
+  document.getElementById('apptUnresultedToggle').addEventListener('click', () => {
+    unresultedListOpen = !unresultedListOpen;
+    const range = currentApptRange();
+    if (range) renderUnresultedList(range[0], range[1]);
+  });
+
+  async function fetchAppointments() {
+    try {
+      const res = await fetch('/api/appointments', { cache: 'no-store' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      apptData = await res.json();
+      renderAppointments();
+    } catch (err) {
+      document.getElementById('apptNote').textContent = `Couldn't load appointment outcomes (${err.message}).`;
+    }
+  }
+
+  document.getElementById('apptRangeSelect').addEventListener('change', renderAppointments);
+  document.getElementById('apptCustomStart').addEventListener('change', renderAppointments);
+  document.getElementById('apptCustomEnd').addEventListener('change', renderAppointments);
+
+  fetchAppointments();
+  setInterval(fetchAppointments, REFRESH_INTERVAL_MS);
+</script>
+
+</body>
+</html>
