@@ -1,0 +1,66 @@
+{
+  // Cloudflare has deprecated Pages for new projects in favor of a single
+  // "Workers" product with a static-assets binding — this file is what
+  // Cloudflare's dashboard "Deploy command" (npx wrangler deploy) reads to
+  // know what to deploy. See README.md's "One-time setup" for the full
+  // walkthrough and why the project is laid out this way.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "js-sales-dashboard",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-24",
+
+  // GHL_LOCATION_ID isn't sensitive (it's the JS Construction sub-account's
+  // public location id, already documented throughout this repo) — it's
+  // declared here, committed to git, instead of via the dashboard's
+  // Variables and Secrets screen, specifically to sidestep a known
+  // Cloudflare issue where dashboard-only variables/secrets get wiped out
+  // by the next git-triggered deploy (every deploy treats this file as the
+  // full source of truth for config — see cloudflare/workers-sdk#8871).
+  "vars": {
+    "GHL_LOCATION_ID": "WXp6Vk4nCuljh1ZHTP4l"
+  },
+
+  // GHL_API_KEY is the one real secret this project needs, so it can't be
+  // committed here like GHL_LOCATION_ID above — but a plain dashboard
+  // secret hit the exact same wipe-on-deploy bug (confirmed: it vanished
+  // after every redeploy, including ones that only touched unrelated
+  // files). Cloudflare Secrets Store is the fix: the secret VALUE lives in
+  // a separate, persistent account-level vault outside this repo, and only
+  // this reference (store id + secret name) is committed — so a deploy has
+  // nothing here to reset. Unlike a plain var/secret, code must resolve it
+  // with `await env.GHL_API_KEY.get()` rather than reading it directly —
+  // see functions/api/data.js and functions/api/appointments.js.
+  "secrets_store_secrets": [
+    {
+      "binding": "GHL_API_KEY",
+      "store_id": "7b70f4525fb445e2af93aeec347c7117",
+      "secret_name": "ghl-api-key"
+    }
+  ],
+
+  // Keeps the edge cache warm on Cloudflare's own clock (see
+  // worker/index.js's `scheduled` handler) instead of relying on a visitor
+  // to trigger the live, slow (and occasionally flaky) pull from GOAT.
+  // "* * * * *" (every minute) re-warms /api/data; "*/2 * * * *" (every 2
+  // minutes) re-warms the much heavier /api/appointments pull — each
+  // matched to that endpoint's own cache window.
+  "triggers": {
+    "crons": ["* * * * *", "*/2 * * * *"]
+  },
+
+  // Everything under public/ is served as a static file automatically
+  // (index.html at "/", public/lib/appointments.js at "/lib/appointments.js",
+  // etc.) — Cloudflare's build tooling (which installs into node_modules at
+  // the repo root while it prepares the deploy) never gets swept into this,
+  // since node_modules isn't inside public/.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // Only /api/* actually needs to run worker/index.js first; every other
+    // request (the page itself, its one JS file) is served straight from
+    // public/ without going through the Worker at all — faster, and it
+    // keeps worker/index.js's job simple: route /api/*, otherwise get out
+    // of the way.
+    "run_worker_first": ["/api/*"]
+  }
+}
