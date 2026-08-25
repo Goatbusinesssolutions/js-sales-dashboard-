@@ -1838,9 +1838,11 @@
       ratesRow.appendChild(tile);
     });
 
-    document.getElementById('apptNote').textContent = mode === 'full'
-      ? `Every appointment in this range was resulted after the ${apptData.fixDate} automation fix, so Not Interested / Not Qualified counts are trusted. Unresulted (${counts.Unresulted || 0}) = showed appointments with no usable status yet — excluded from the rates above.`
-      : `This range includes dates before the ${apptData.fixDate} fix, when Not Interested / Not Qualified tagging could delete the opportunity instead of changing its status — those two counts (and the rates above) are best-effort only. Unresulted (${counts.Unresulted || 0}) = showed appointments with no usable status — excluded from the rates above.`;
+    const notYetResultedCount = (counts.Unresulted || 0) + (counts.Upcoming || 0);
+    const modeCaveat = mode === 'full'
+      ? `Every appointment in this range that's already happened was resulted after the ${apptData.fixDate} automation fix, so Not Interested / Not Qualified counts are trusted.`
+      : `This range includes dates before the ${apptData.fixDate} fix, when Not Interested / Not Qualified tagging could delete the opportunity instead of changing its status — those two counts (and the rates above) are best-effort only.`;
+    document.getElementById('apptNote').textContent = `${modeCaveat} Not yet resulted (${notYetResultedCount}) = ${counts.Upcoming || 0} still upcoming later in this range, plus ${counts.Unresulted || 0} that already happened with no outcome recorded — both excluded from the rates above, and neither counted in the detailed breakdown below (that row only covers appointments with an actual outcome).`;
 
     refreshOpenDrilldown(start, end);
 
@@ -1925,19 +1927,29 @@
   // block) so a metric's drill-down list always has exactly as many rows
   // as the count shown next to it.
   const APPT_METRIC_BUCKETS = {
-    Total: ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted'],
+    // "On the books" = every appointment actually happening in this range —
+    // already resulted, overdue-and-never-marked (Unresulted), or still
+    // ahead on the calendar (Upcoming). Deliberately excludes Excluded
+    // (cancelled/invalid) — a cancelled appointment isn't "out" anymore.
+    Total: ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted', 'Upcoming'],
     Opportunities: ['Sold', 'DNS', 'IncTime', 'NI'],
     Demos: ['Sold', 'DNS'],
     Sales: ['Sold'],
-    Unresulted: ['Unresulted'],
+    // "Not yet resulted" = no outcome recorded yet, for either reason: it
+    // already happened and nobody marked it (Unresulted), or it hasn't
+    // happened yet (Upcoming). Key stays 'Unresulted' internally (that's
+    // what toggleDrilldown/APPT_METRIC_BUCKETS callers already key off of)
+    // even though the label below is broader now.
+    Unresulted: ['Unresulted', 'Upcoming'],
   };
 
-  // Summary row = Total / Opportunities / Demos / Sales / Unresulted, per
-  // the "How You're Measured" formulas in lib/appointments.js's
-  // computeRates. Built from the same `counts` sumRange() already
-  // produced for the detailed 7-bucket row and the Opp/Demo/Close rate
-  // tiles below, so all three sections of this UI always agree with each
-  // other by construction, not by coincidence.
+  // Summary row = On the books / Opportunities / Demos / Sales / Not yet
+  // resulted, per the "How You're Measured" formulas in lib/appointments.js's
+  // computeRates, PLUS Upcoming folded into the first and last tiles (see
+  // APPT_METRIC_BUCKETS above) — Upcoming isn't part of computeRates' rate
+  // math at all, it's purely a scheduling fact layered on top so "On the
+  // books" matches what's literally on the calendar for the range, not just
+  // what's already been resulted.
   //
   // Opportunities % and Demos % are only meaningful in 'full' mode — same
   // restriction computeRates applies to oppRate/demoToOppRate, for the
@@ -1947,18 +1959,19 @@
   function buildSummary(counts, mode) {
     const sold = counts.Sold || 0, dns = counts.DNS || 0, noShow = counts.NoShow || 0,
       incTime = counts.IncTime || 0, ni = counts.NI || 0, nq = counts.NQ || 0,
-      unresulted = counts.Unresulted || 0;
+      unresulted = counts.Unresulted || 0, upcoming = counts.Upcoming || 0;
     const resulted = sold + dns + noShow + incTime + ni + nq;
-    const total = resulted + unresulted;
+    const notYetResulted = unresulted + upcoming;
+    const onTheBooks = resulted + notYetResulted;
     const estimatesSent = sold + dns;
     const oppPool = sold + dns + incTime + ni;
     const full = mode === 'full';
     return [
-      { key: 'Total', label: 'Total appointments', value: total, pct: null, rateLabel: null },
+      { key: 'Total', label: 'On the books', value: onTheBooks, pct: null, rateLabel: null },
       { key: 'Opportunities', label: 'Opportunities', value: oppPool, pct: full && resulted ? oppPool / resulted : null, rateLabel: 'Opp rate' },
       { key: 'Demos', label: 'Demos', value: estimatesSent, pct: full && oppPool ? estimatesSent / oppPool : null, rateLabel: 'Demo-to-opp rate' },
       { key: 'Sales', label: 'Sales', value: sold, pct: estimatesSent ? sold / estimatesSent : null, rateLabel: 'Close rate' },
-      { key: 'Unresulted', label: 'Unresulted', value: unresulted, pct: null, rateLabel: null },
+      { key: 'Unresulted', label: 'Not yet resulted', value: notYetResulted, pct: null, rateLabel: null },
     ];
   }
 
