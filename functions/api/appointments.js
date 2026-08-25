@@ -120,19 +120,39 @@ async function loadAppointments(env) {
     const wonRecords = extractWonRecords(opportunities, { tz });
     mergeWonSalesIntoDaily(daily, rollupSalesDaily(wonRecords));
 
-    // Drill-down list for the "Unresulted" bucket — a count alone doesn't
-    // tell anyone which appointment to go fix. Newest first, since those
-    // are the most actionable (older ones are more likely already stale/
-    // moot). No hard cap: this location's Unresulted count is in the low
-    // hundreds, so the payload stays small; revisit if that changes.
-    const unresulted = classified
-      .filter((r) => r.bucket === 'Unresulted')
+    // Drill-down lists — a bucket count alone doesn't tell anyone WHICH
+    // appointment/contact it's made of. Every bucket except Sold gets one
+    // row per classified calendar appointment, newest first (most
+    // actionable). Sold is deliberately excluded here and sourced from
+    // `sold` below instead — see the big comment on `wonRecords` above:
+    // the Sold COUNT in `daily` comes from won-by-Won-Date, not from these
+    // calendar-classified 'Sold' events, so a calendar-based Sold list here
+    // would occasionally disagree with the Sold count shown next to it.
+    // No hard cap: this location's per-bucket counts are in the low
+    // hundreds to low thousands at most, so the payload stays small.
+    const outcomeEvents = classified
+      .filter((r) => r.bucket !== 'Sold')
       .map((r) => ({
         date: r.date,
+        bucket: r.bucket,
         title: r.title,
         contactId: r.contactId,
         assignedUserId: r.assignedUserId,
-        reason: describeReason(r.note),
+        reason: r.bucket === 'Unresulted' ? describeReason(r.note) : null,
+      }))
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+    // Sold drill-down — sourced from the SAME won-by-Won-Date records that
+    // drive the Sold count/value above (wonRecords), not from `classified`,
+    // so this list's length always exactly matches the Sold count it's
+    // attached to.
+    const sold = wonRecords
+      .map((r) => ({
+        date: r.wonDate,
+        title: r.name,
+        contactId: r.contactId,
+        assignedUserId: r.assignedTo || 'unassigned',
+        value: r.monetaryValue,
       }))
       .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
@@ -142,7 +162,8 @@ async function loadAppointments(env) {
     for (const day of Object.values(daily)) {
       for (const rep of Object.keys(day.byRep)) repIds.add(rep);
     }
-    for (const r of unresulted) repIds.add(r.assignedUserId);
+    for (const r of outcomeEvents) repIds.add(r.assignedUserId);
+    for (const r of sold) repIds.add(r.assignedUserId);
     const names = { ...repNames };
     await Promise.all([...repIds].map(async (id) => {
       if (id === 'unassigned' || names[id]) return;
@@ -159,7 +180,14 @@ async function loadAppointments(env) {
         locationId,
         historyStart: new Date(startMs).toISOString().slice(0, 10),
         daily,
-        unresulted,
+        // Per-appointment drill-down data — every classified calendar
+        // appointment except Sold (`events`), plus the authoritative
+        // won-by-Won-Date Sold list (`sold`). The client unions these by
+        // whichever bucket (or virtual group like "Opportunities"/"Demos")
+        // the visitor clicked on, filtered to the currently selected date
+        // range — see goatContactUrl/openDrilldown in index.html.
+        events: outcomeEvents,
+        sold,
         reps: names,
       },
     };
