@@ -27,6 +27,11 @@ const NI_NQ_TAG_NAMES = [
   'inc time', 'inc. time', 'inconvenient time',
 ];
 
+// A fixed, made-up URL used only as a lookup key for Cloudflare's edge
+// Cache API (caches.default) — see the matching constant + comment in
+// functions/api/data.js for why this ignores the real request URL.
+const CACHE_KEY = new Request('https://js-dashboard-cache.internal/api/appointments');
+
 function json(data, status, cacheSeconds) {
   const headers = { 'Content-Type': 'application/json' };
   if (cacheSeconds) headers['Cache-Control'] = `public, s-maxage=${cacheSeconds}, stale-while-revalidate=300`;
@@ -55,16 +60,19 @@ function missingEnvDetail(apiKey, locationId) {
   };
 }
 
-export async function onRequestGet(context) {
-  const env = context.env;
-
-  try {
+// Does the actual GOAT pull + classification — no knowledge of caching or
+// HTTP status codes. Split out from onRequestGet so the cache-lookup/
+// cache-store wrapper below stays simple, and so worker/index.js's cron
+// `scheduled` warmer (see wrangler.jsonc's triggers.crons) can run this
+// same expensive computation proactively instead of a visitor ever
+// triggering it live.
+async function loadAppointments(env) {
     // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not
     // a plain string — .get() is what actually fetches the secret value.
     const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
     const locationId = env.GHL_LOCATION_ID;
     if (!apiKey || !locationId) {
-      return json(missingEnvDetail(apiKey, locationId), 500);
+      return { status: 500, body: missingEnvDetail(apiKey, locationId) };
     }
 
     const tz = env.DASHBOARD_TZ || 'America/New_York';
@@ -141,17 +149,45 @@ export async function onRequestGet(context) {
       names[id] = await getUserName(id, apiKey);
     }));
 
-    return json({
-      asOf: new Date().toISOString(),
-      tz,
-      fixDate,
-      calendarId,
-      locationId,
-      historyStart: new Date(startMs).toISOString().slice(0, 10),
-      daily,
-      unresulted,
-      reps: names,
-    }, 200, 120);
+    return {
+      status: 200,
+      body: {
+        asOf: new Date().toISOString(),
+        tz,
+        fixDate,
+        calendarId,
+        locationId,
+        historyStart: new Date(startMs).toISOString().slice(0, 10),
+        daily,
+        unresulted,
+        reps: names,
+      },
+    };
+}
+
+export async function onRequestGet(context) {
+  const { env, ctx } = context;
+  const cache = caches.default;
+
+  // Edge cache check FIRST, before touching GOAT at all — see the matching
+  // comment in functions/api/data.js's onRequestGet. This is the endpoint
+  // that benefits most: a cache miss here is ~90-120 GOAT API calls, so
+  // actually caching the result (instead of only setting a Cache-Control
+  // header the browser saw but Cloudflare's own edge never acted on) is
+  // most of the "why is this slow / why does it sometimes error" fix.
+  const cached = await cache.match(CACHE_KEY);
+  if (cached) return cached;
+
+  try {
+    const result = await loadAppointments(env);
+    // Only a successful pull is worth caching; a transient failure should
+    // let the very next request try again rather than serving (or
+    // extending) an error for a full 2 minutes.
+    const response = json(result.body, result.status, result.status === 200 ? 120 : undefined);
+    if (result.status === 200) {
+      ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
+    }
+    return response;
   } catch (err) {
     return json({ error: 'Failed to load appointment outcomes', detail: String((err && err.message) || err) }, 502);
   }
