@@ -12,6 +12,14 @@ import { computeDashboard } from '../../lib/aggregate.js';
 
 const DEFAULT_WEEKLY_TARGET = 288000;
 
+// A fixed, made-up URL used only as a lookup key for Cloudflare's edge
+// Cache API (caches.default) — deliberately NOT the real request URL, so
+// the cached entry doesn't fragment across whatever hostname a request
+// actually arrives on (today's workers.dev domain, a custom domain later,
+// or the synthetic request worker/index.js's cron `scheduled` warmer uses).
+// Every reader and writer of this cache must agree on this exact key.
+const CACHE_KEY = new Request('https://js-dashboard-cache.internal/api/data');
+
 function json(data, status, cacheSeconds) {
   const headers = { 'Content-Type': 'application/json' };
   if (cacheSeconds) headers['Cache-Control'] = `public, s-maxage=${cacheSeconds}, stale-while-revalidate=120`;
@@ -40,42 +48,67 @@ function missingEnvDetail(apiKey, locationId) {
   };
 }
 
+// Does the actual GOAT pull + aggregation — no knowledge of caching or HTTP
+// status codes, just "here's what happened." Split out from onRequestGet so
+// the cache-lookup/cache-store wrapper below stays simple, and so
+// worker/index.js's cron `scheduled` warmer (see wrangler.jsonc's
+// triggers.crons) can run the exact same computation a real visitor would,
+// just proactively, ahead of anyone actually asking for it.
+async function loadDashboard(env) {
+  // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not a
+  // plain string — .get() is what actually fetches the secret value.
+  const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
+  const locationId = env.GHL_LOCATION_ID;
+
+  if (!apiKey || !locationId) {
+    return { status: 500, body: missingEnvDetail(apiKey, locationId) };
+  }
+
+  const weeklyTarget = Number(env.WEEKLY_TARGET) || DEFAULT_WEEKLY_TARGET;
+  const monthlyTarget = Number(env.MONTHLY_TARGET) || Math.round((weeklyTarget * 52) / 12);
+  const yearlyTarget = Number(env.YEARLY_TARGET) || weeklyTarget * 52;
+
+  const opportunities = await fetchAllWonOpportunities(locationId, apiKey);
+  const dashboard = await computeDashboard(opportunities, {
+    tz: env.DASHBOARD_TZ || 'America/New_York',
+    weeklyTarget,
+    monthlyTarget,
+    yearlyTarget,
+    wonDateFieldId: env.GHL_WON_DATE_FIELD_ID,
+    apiKey,
+    getUserName,
+  });
+
+  return { status: 200, body: dashboard };
+}
+
 export async function onRequestGet(context) {
-  const env = context.env;
+  const { env, ctx } = context;
+  const cache = caches.default;
+
+  // Edge cache check FIRST, before touching GOAT at all. Cloudflare's own
+  // cache is the actual fix here — the Cache-Control header alone (below)
+  // only ever told the *browser*/downstream CDNs how to treat the
+  // response; it never made Cloudflare itself store it, so every page load
+  // and every 60s auto-refresh was paying for a full live pull from GOAT.
+  // A hit here means either a recent real visitor or worker/index.js's
+  // cron warmer already paid that cost — see CACHE_KEY's comment for why
+  // this ignores the actual incoming request URL.
+  const cached = await cache.match(CACHE_KEY);
+  if (cached) return cached;
 
   try {
-    // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not
-    // a plain string — .get() is what actually fetches the secret value.
-    const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
-    const locationId = env.GHL_LOCATION_ID;
-
-    if (!apiKey || !locationId) {
-      return json(missingEnvDetail(apiKey, locationId), 500);
+    const result = await loadDashboard(env);
+    // Kept short (1 min) so a status change in GOAT shows up promptly (see
+    // REFRESH_INTERVAL_MS in index.html) — raise this if GOAT call volume
+    // ever becomes a concern. Only a successful pull is worth caching; a
+    // transient failure should let the very next request try again rather
+    // than serving (or extending) an error for a full minute.
+    const response = json(result.body, result.status, result.status === 200 ? 60 : undefined);
+    if (result.status === 200) {
+      ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
     }
-
-    const weeklyTarget = Number(env.WEEKLY_TARGET) || DEFAULT_WEEKLY_TARGET;
-    const monthlyTarget = Number(env.MONTHLY_TARGET) || Math.round((weeklyTarget * 52) / 12);
-    const yearlyTarget = Number(env.YEARLY_TARGET) || weeklyTarget * 52;
-
-    const opportunities = await fetchAllWonOpportunities(locationId, apiKey);
-    const dashboard = await computeDashboard(opportunities, {
-      tz: env.DASHBOARD_TZ || 'America/New_York',
-      weeklyTarget,
-      monthlyTarget,
-      yearlyTarget,
-      wonDateFieldId: env.GHL_WON_DATE_FIELD_ID,
-      apiKey,
-      getUserName,
-    });
-
-    // Cache at Cloudflare's edge so a normal amount of traffic doesn't
-    // hammer the GHL API (which paginates through every won opportunity on
-    // every uncached hit). Any visitor within this window gets the cached
-    // response; the next visitor after it expires triggers a fresh pull.
-    // Kept short (1 min) so a status change in GOAT shows up on the next
-    // client poll (see REFRESH_INTERVAL_MS in index.html) — raise this if
-    // GHL call volume ever becomes a concern.
-    return json(dashboard, 200, 60);
+    return response;
   } catch (err) {
     return json({ error: 'Failed to load dashboard data', detail: String((err && err.message) || err) }, 502);
   }
