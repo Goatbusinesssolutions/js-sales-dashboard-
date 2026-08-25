@@ -37,22 +37,19 @@ function todayStrInTZ(tz) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
-// See the matching helper + comment in functions/api/data.js — same
-// reasoning: Cloudflare's dashboard can't distinguish "secret not set" from
-// "secret set to a blank/whitespace value" visually, so this response body
-// is the only place that's actually checkable.
-function missingEnvDetail(env) {
-  const apiKey = env.GHL_API_KEY;
-  const locationId = env.GHL_LOCATION_ID;
+// See the matching helper + comment in functions/api/data.js. Takes the
+// already-resolved apiKey/locationId strings, since GHL_API_KEY is now a
+// Secrets Store binding (an object with .get()), not a plain string.
+function missingEnvDetail(apiKey, locationId) {
   const missing = [];
   if (!apiKey) missing.push('GHL_API_KEY');
   if (!locationId) missing.push('GHL_LOCATION_ID');
   return {
-    error: `Missing ${missing.join(' and ')}. Set ${missing.length > 1 ? 'them' : 'it'} under Workers & Pages > your project > Settings > Variables and Secrets.`,
+    error: `Missing ${missing.join(' and ')}. GHL_API_KEY lives in Cloudflare Secrets Store (check wrangler.jsonc's secrets_store_secrets binding and that the secret's status is Active, not Pending); GHL_LOCATION_ID lives in wrangler.jsonc's vars block.`,
     debug: {
       GHL_API_KEY: apiKey
         ? `present, length ${apiKey.length}${apiKey.trim() !== apiKey ? ' — HAS LEADING/TRAILING WHITESPACE, re-paste it' : ''}`
-        : 'MISSING (undefined or empty string)',
+        : 'MISSING (binding not resolving — Secrets Store secret may still be Pending, or store_id/secret_name in wrangler.jsonc is wrong)',
       GHL_LOCATION_ID: locationId ? `present: "${locationId}"` : 'MISSING (undefined or empty string)',
     },
   };
@@ -62,10 +59,12 @@ export async function onRequestGet(context) {
   const env = context.env;
 
   try {
-    const apiKey = env.GHL_API_KEY;
+    // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not
+    // a plain string — .get() is what actually fetches the secret value.
+    const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
     const locationId = env.GHL_LOCATION_ID;
     if (!apiKey || !locationId) {
-      return json(missingEnvDetail(env), 500);
+      return json(missingEnvDetail(apiKey, locationId), 500);
     }
 
     const tz = env.DASHBOARD_TZ || 'America/New_York';

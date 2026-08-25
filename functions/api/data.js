@@ -21,24 +21,20 @@ function json(data, status, cacheSeconds) {
 // Diagnostic-grade version of the missing-env-var check: says exactly which
 // var is missing (not just "one of these two"), and for the ones that ARE
 // present, reports a length/whitespace check WITHOUT ever echoing the
-// secret value itself — safe to leave in permanently. This exists because
-// Cloudflare's dashboard always shows "Value encrypted" for a secret
-// whether the real value is a valid token or a blank string, so from the
-// dashboard alone there's no way to tell "not set" apart from "set to
-// nothing" or "set with a stray space/newline pasted in." This endpoint's
-// response is the only place that distinction is actually visible.
-function missingEnvDetail(env) {
-  const apiKey = env.GHL_API_KEY;
-  const locationId = env.GHL_LOCATION_ID;
+// secret value itself — safe to leave in permanently. Takes the already-
+// resolved apiKey/locationId strings (not the raw env), since GHL_API_KEY
+// is now a Secrets Store binding — an object with a .get() method, not a
+// plain string — so it has to be awaited before it can be inspected at all.
+function missingEnvDetail(apiKey, locationId) {
   const missing = [];
   if (!apiKey) missing.push('GHL_API_KEY');
   if (!locationId) missing.push('GHL_LOCATION_ID');
   return {
-    error: `Missing ${missing.join(' and ')}. Set ${missing.length > 1 ? 'them' : 'it'} under Workers & Pages > your project > Settings > Variables and Secrets.`,
+    error: `Missing ${missing.join(' and ')}. GHL_API_KEY lives in Cloudflare Secrets Store (check wrangler.jsonc's secrets_store_secrets binding and that the secret's status is Active, not Pending); GHL_LOCATION_ID lives in wrangler.jsonc's vars block.`,
     debug: {
       GHL_API_KEY: apiKey
         ? `present, length ${apiKey.length}${apiKey.trim() !== apiKey ? ' — HAS LEADING/TRAILING WHITESPACE, re-paste it' : ''}`
-        : 'MISSING (undefined or empty string)',
+        : 'MISSING (binding not resolving — Secrets Store secret may still be Pending, or store_id/secret_name in wrangler.jsonc is wrong)',
       GHL_LOCATION_ID: locationId ? `present: "${locationId}"` : 'MISSING (undefined or empty string)',
     },
   };
@@ -48,11 +44,13 @@ export async function onRequestGet(context) {
   const env = context.env;
 
   try {
-    const apiKey = env.GHL_API_KEY;
+    // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not
+    // a plain string — .get() is what actually fetches the secret value.
+    const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
     const locationId = env.GHL_LOCATION_ID;
 
     if (!apiKey || !locationId) {
-      return json(missingEnvDetail(env), 500);
+      return json(missingEnvDetail(apiKey, locationId), 500);
     }
 
     const weeklyTarget = Number(env.WEEKLY_TARGET) || DEFAULT_WEEKLY_TARGET;

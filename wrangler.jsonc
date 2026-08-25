@@ -13,12 +13,30 @@
   // public location id, already documented throughout this repo) — it's
   // declared here, committed to git, instead of via the dashboard's
   // Variables and Secrets screen, specifically to sidestep a known
-  // Cloudflare issue where dashboard-only variables can get wiped out by
-  // the next git-triggered deploy. Only GHL_API_KEY (the actual secret)
-  // still needs to be set in the dashboard — see README.md.
+  // Cloudflare issue where dashboard-only variables/secrets get wiped out
+  // by the next git-triggered deploy (every deploy treats this file as the
+  // full source of truth for config — see cloudflare/workers-sdk#8871).
   "vars": {
     "GHL_LOCATION_ID": "WXp6Vk4nCuljh1ZHTP4l"
   },
+
+  // GHL_API_KEY is the one real secret this project needs, so it can't be
+  // committed here like GHL_LOCATION_ID above — but a plain dashboard
+  // secret hit the exact same wipe-on-deploy bug (confirmed: it vanished
+  // after every redeploy, including ones that only touched unrelated
+  // files). Cloudflare Secrets Store is the fix: the secret VALUE lives in
+  // a separate, persistent account-level vault outside this repo, and only
+  // this reference (store id + secret name) is committed — so a deploy has
+  // nothing here to reset. Unlike a plain var/secret, code must resolve it
+  // with `await env.GHL_API_KEY.get()` rather than reading it directly —
+  // see functions/api/data.js and functions/api/appointments.js.
+  "secrets_store_secrets": [
+    {
+      "binding": "GHL_API_KEY",
+      "store_id": "7b70f4525fb445e2af93aeec347c7117",
+      "secret_name": "ghl-api-key"
+    }
+  ],
 
   // Everything under public/ is served as a static file automatically
   // (index.html at "/", public/lib/appointments.js at "/lib/appointments.js",

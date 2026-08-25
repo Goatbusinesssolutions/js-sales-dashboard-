@@ -133,29 +133,49 @@ its built-in CI ("Workers Builds").
    > Pages-specific "Build output directory" setting — don't apply here;
    > this repo is a Worker project now, not a Pages project, which is why
    > the settings screen looks different than older guides describe.)
-4. Once the first deploy finishes, go to your new Worker's
-   **Settings → Variables and Secrets → Add** and add:
-   - `GHL_API_KEY` — the token from step 1 (check **Encrypt** so it's
-     stored as a secret)
-   - Optionally `WEEKLY_TARGET`, `MONTHLY_TARGET`, `YEARLY_TARGET` if you
-     ever want to change the sales targets without touching code.
+4. `GHL_API_KEY` is stored in **Cloudflare Secrets Store**, not the
+   project's own Settings → Variables and Secrets screen. This isn't the
+   default place to put a secret, and it's a deliberate fix for a real bug
+   we hit: a plain dashboard-only secret gets wiped out by the *next*
+   git-triggered deploy on a Workers Builds project — confirmed
+   repeatedly, it vanished after every redeploy, even ones that only
+   touched unrelated files (this is a documented Cloudflare issue,
+   [workers-sdk#8871](https://github.com/cloudflare/workers-sdk/issues/8871);
+   every deploy treats `wrangler.jsonc` as the complete source of truth for
+   config, so anything not declared there gets reset). `GHL_LOCATION_ID`
+   sidesteps this by being committed directly in `wrangler.jsonc`'s `vars`
+   block — fine for a non-sensitive value, but `GHL_API_KEY` obviously
+   can't be committed to the repo in plaintext. Secrets Store is
+   Cloudflare's actual fix for exactly this: the secret **value** lives in
+   a separate, persistent account-level vault, completely outside this
+   repo and outside the per-deploy config, so a deploy has nothing to
+   reset. Only a *reference* to it (a store id + secret name) is committed
+   in `wrangler.jsonc`'s `secrets_store_secrets` block.
 
-   `GHL_LOCATION_ID` does **not** go here — it's already committed in
-   `wrangler.jsonc`'s `vars` block, on purpose (see the note in step 2's
-   callout above). Adding it again in the dashboard won't break anything,
-   but it's not necessary.
+   To set it up (only needs doing once, already done for this project —
+   listed here for reference / in case it ever needs recreating):
+   - In the Cloudflare dashboard, go to **Secrets Store**
+     (`dash.cloudflare.com/?to=/:account/secrets-store` if it's not in
+     your sidebar — it's a beta feature and doesn't always show up there
+     automatically).
+   - **Create secret** → name it `ghl-api-key`, paste the token from
+     step 1 as the value, set permission scope to **Workers**, save.
+   - Copy the **Store ID** it's assigned and make sure it matches the
+     `store_id` in `wrangler.jsonc`'s `secrets_store_secrets` block (the
+     `secret_name` there — `ghl-api-key` — has to match exactly too).
+   - A freshly-created secret can show status **Pending** for a short
+     while before it's usable — if `/api/data` says `GHL_API_KEY` is
+     missing right after creating it, wait a minute and redeploy.
 
-   > **Known Cloudflare issue:** dashboard-only variables and secrets can
-   > occasionally get wiped out by the *next* git-triggered deploy on a
-   > project like this one (Cloudflare's own build tooling, not this
-   > project). If `GHL_API_KEY` ever goes missing again after a deploy you
-   > didn't expect to touch it, that's why — just re-add it under
-   > Settings → Variables and Secrets and retry the deployment. This is
-   > why `GHL_LOCATION_ID` was moved into `wrangler.jsonc` instead:
-   > anything committed to the repo can't be wiped this way, only things
-   > that are dashboard-only (which `GHL_API_KEY`, being an actual secret,
-   > has to stay).
-5. Trigger a redeploy so the new variable takes effect (**Deployments →
+   Optionally also add `WEEKLY_TARGET`, `MONTHLY_TARGET`, `YEARLY_TARGET`
+   under the project's own Settings → Variables and Secrets if you ever
+   want to change the sales targets without touching code — those aren't
+   sensitive, so the dashboard-secret-wipe issue doesn't matter for them
+   (just re-add them if a deploy ever resets them, same as before).
+
+   `GHL_LOCATION_ID` does **not** go in Secrets Store or the dashboard —
+   it's already committed in `wrangler.jsonc`'s `vars` block, on purpose.
+5. Trigger a redeploy so the new binding takes effect (**Deployments →
    ⋯ → Retry deployment**, or just push any small change to the repo).
 6. Open the `*.workers.dev` URL Cloudflare gives you — that's your live
    dashboard. Bookmark it, put it on an office TV, whatever you like. You
@@ -216,7 +236,7 @@ when you switch periods; it's all client-side math over that one payload,
 so switching is instant and works for literally any custom date range, not
 just the presets.
 
-## Appointment outcomes (Sold / DNS / No Show / NI / NQ)
+## Appointment outcomes (Sold / DNS / No Show / Inc. Time / NI / NQ)
 
 A second section on the dashboard tracks estimate-appointment results —
 Sold, DNS (demo, no sale), No Show, Not Interested, Not Qualified — with a
@@ -264,9 +284,24 @@ going back `APPOINTMENTS_HISTORY_DAYS` days (default 260). That's roughly
   estimate was already given and it's still being worked.
 - **No Show** — the calendar event's own `appointmentStatus` is
   `noshow` (this also folds in "one leg" — GHL has no separate tracking
-  for that distinction).
+  for that distinction; both mean the same thing for reporting purposes
+  per the training manual, so folding them together doesn't affect any
+  rate). Does **not** count as an opportunity.
+- **Inc. Time ("Inconvenient Time")** — `appointmentStatus` is `invalid`
+  **and** the contact carries an `inc time` tag. The whole buying
+  committee was present, but no demo/price was given (contact was tied
+  up, unwell, etc.); the appointment resets the same way as No Show/One
+  Leg, but unlike those, **this does count as an opportunity** — a
+  decision-maker was actually in front of the advisor. Checked off the
+  tag rather than opportunity status, because Inc. Time doesn't change the
+  linked opportunity's status at all (it stays open; only its stage moves
+  to Reset).
 - **Not Interested (NI)** — opportunity status `lost`, or (when no
-  opportunity exists) a "not interested"-family tag.
+  opportunity exists) a "not interested"-family tag. Counts as an
+  opportunity (no price was ever given, but a real "no" from a real
+  buying committee still counts) — this is only valid when no estimate
+  was ever sent; once a price goes out, it's a DNS instead, no matter
+  what the customer says afterward.
 - **Not Qualified (NQ)** — opportunity status `abandoned`, or (when no
   opportunity exists) a "not qualified"-family tag.
 - **Unresulted** — a showed appointment that doesn't fit any bucket above
@@ -303,8 +338,9 @@ that period) and only a modified demo rate / modified close rate are
 shown, based on Sold/DNS/No-Show. Ranges entirely on/after the fix date
 use "full mode" with the normal opp rate / demo-to-opp rate / close rate.
 
-**New optional environment variables** (all have working defaults, same
-place as `GHL_API_KEY`):
+**New optional environment variables** (all have working defaults; these
+aren't sensitive, so they go in the project's own Settings → Variables and
+Secrets screen — not Secrets Store, that's `GHL_API_KEY`-only):
 
 - `GHL_ESTIMATE_CALENDAR_ID` — which calendar to pull appointments from.
 - `APPOINTMENTS_FIX_DATE` — the full/modified mode cutoff (`YYYY-MM-DD`).
