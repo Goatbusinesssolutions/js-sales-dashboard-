@@ -431,6 +431,22 @@
   .unres-reason { color: var(--text-muted); margin-top: 3px; }
   .unres-link { display: inline-block; margin-top: 6px; font-size: 11.5px; font-weight: 600; color: var(--series-accent); text-decoration: none; }
   .unres-link:hover { text-decoration: underline; }
+  /* Per-rep appointment breakdown (appts/opps/demos/sales + rates) below
+     the appointment-outcomes rep leaderboard. Deliberately its own class
+     names, NOT .lb-row/.lb-vals/.lb-count — those are shared by the sales-$
+     leaderboard (renderLbRowsInto, used by both the live and historical
+     views) and redefining them here would break those unrelated sections. */
+  .appt-rep-row { padding: 10px 0 12px; border-bottom: 1px solid var(--gridline); }
+  .appt-rep-row:last-child { border-bottom: none; }
+  .appt-rep-top { display: grid; grid-template-columns: minmax(0,150px) 1fr 92px; gap: 10px; align-items: center; }
+  .appt-rep-stats { display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap; }
+  .appt-rep-stat { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+  .appt-rep-stat b { color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .appt-rep-stat .appt-rep-stat-pct { color: var(--series-accent); font-weight: 700; margin-left: 3px; }
+  @media (max-width: 640px) {
+    .appt-rep-top { grid-template-columns: minmax(0,110px) 1fr 76px; gap: 8px; }
+    .appt-rep-stats { gap: 10px 14px; }
+  }
   @media (max-width: 640px) {
     .appt-counts-row { grid-template-columns: repeat(3, 1fr); }
     .appt-rates-row { grid-template-columns: 1fr; }
@@ -1830,59 +1846,70 @@
 
     const repRowsEl = document.getElementById('apptRepRows');
     repRowsEl.innerHTML = '';
+    // Per-rep breakdown: appts / opps / demos / sales, each with the rate
+    // that stat is of the one right before it (opps÷appts = Opp rate,
+    // demos÷opps = Demo-to-opp rate, sales÷demos = Close rate) — same
+    // formulas as the summary row up top (buildSummary), just scoped to
+    // one rep's counts. Opp rate and Demo-to-opp rate always show here
+    // (not just in Full mode, unlike the summary row) — same treatment
+    // Close rate already gets. For a range touching pre-8/16 dates the
+    // "Modified mode" badge above already flags that NI/NQ (and so Opp
+    // rate) may undercount — that caveat applies here too, it's just not
+    // re-stated per rep.
+    //
+    // "Appts" = RESULTED appointments only (Sold+DNS+NoShow+IncTime+NI+NQ)
+    // — deliberately NOT the same "Total" the summary row shows (which
+    // adds Unresulted on top). Every rate here divides one stat by the
+    // stat right before it, so using resulted-only as "appts" makes the
+    // row's own numbers divide out to the % shown next to them.
     const repList = Object.keys(byRep)
       .filter((id) => id !== 'unassigned')
       .map((id) => {
         const c = byRep[id];
-        const r = computeRates(c, mode);
+        const sold = c.Sold || 0, dns = c.DNS || 0, noShow = c.NoShow || 0,
+          incTime = c.IncTime || 0, ni = c.NI || 0, nq = c.NQ || 0;
+        const resulted = sold + dns + noShow + incTime + ni + nq;
+        const estimatesSent = sold + dns;
+        const oppPool = sold + dns + incTime + ni;
         return {
           name: (apptData.reps && apptData.reps[id]) || id,
-          sold: c.Sold || 0,
           // Dollar total of this rep's Sold appointments in the period,
           // attributed by the appointment's own date/rep (see the note on
           // classifyEvents' `value` field) — not the same attribution as
           // the sales-$ dashboard above (Won Date/opportunity owner), so
           // the two totals for the same rep can differ slightly.
           soldValue: byRepValue[id] || 0,
-          // Appointments = every RESULTED appointment for that rep (Sold +
-          // DNS + No Show + Inc. Time + NI + NQ — same "resulted" total
-          // computeRates uses, and the same one the counts row above sums
-          // to). Excludes Unresulted (no usable status yet), Excluded
-          // (cancelled/invalid), and Upcoming (hasn't happened yet).
-          appointments: r.resulted || 0,
-          // "Estimates sent" = Sold + DNS — both mean a price was actually
-          // given (DNS = estimate given, not yet sold; NI/NQ/No Show/Inc.
-          // Time never got that far, by the classification rules). This is
-          // exactly the denominator "close rate" divides by in both modes,
-          // so the two numbers always reconcile: sold ÷ estimates = close
-          // rate — see the footnote below the table.
-          estimates: (c.Sold || 0) + (c.DNS || 0),
-          // Demo rate = same demo-to-opp / modified-demo-rate formula as
-          // the rate tiles above, scoped to this rep — so it matches the
-          // dashboard-wide definition rather than inventing a rep-only one.
-          demoRate: mode === 'full' ? r.demoToOppRate : r.modifiedDemoRate,
-          closeRate: mode === 'full' ? r.closeRate : r.modifiedCloseRate,
+          appts: resulted,
+          opps: oppPool,
+          oppRate: resulted ? oppPool / resulted : null,
+          demos: estimatesSent,
+          demoRate: oppPool ? estimatesSent / oppPool : null,
+          sales: sold,
+          closeRate: estimatesSent ? sold / estimatesSent : null,
         };
       })
-      .filter((r) => r.estimates > 0)
-      .sort((a, b) => b.soldValue - a.soldValue || b.sold - a.sold || b.estimates - a.estimates);
+      .filter((r) => r.appts > 0)
+      .sort((a, b) => b.soldValue - a.soldValue || b.sales - a.sales || b.demos - a.demos);
 
     if (!repList.length) {
-      repRowsEl.innerHTML = '<div class="lb-empty">No estimates sent in this period yet.</div>';
+      repRowsEl.innerHTML = '<div class="lb-empty">No appointments in this period yet.</div>';
       return;
     }
     const maxValue = Math.max(1, ...repList.map((r) => r.soldValue));
     repList.forEach((r) => {
       const row = document.createElement('div');
-      row.className = 'lb-row';
+      row.className = 'appt-rep-row';
       row.innerHTML = `
-        <div class="lb-rank"></div>
-        <div class="lb-name" title="${r.name}">${r.name}</div>
-        <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${Math.max((r.soldValue / maxValue) * 100, 1.5)}%"></div></div>
-        <div class="lb-vals">
+        <div class="appt-rep-top">
+          <div class="lb-name" title="${r.name}">${r.name}</div>
+          <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${Math.max((r.soldValue / maxValue) * 100, 1.5)}%"></div></div>
           <div class="lb-value">${fmtMoney(r.soldValue)}</div>
-          <div class="lb-count">${r.sold} sold · ${apptPct(r.closeRate)} close</div>
-          <div class="lb-count">${r.appointments} appts · ${r.estimates} est · ${apptPct(r.demoRate)} demo</div>
+        </div>
+        <div class="appt-rep-stats">
+          <div class="appt-rep-stat"><b>${r.appts}</b> appts</div>
+          <div class="appt-rep-stat"><b>${r.opps}</b> opps${r.oppRate != null ? `<span class="appt-rep-stat-pct">${apptPct(r.oppRate)}</span>` : ''}</div>
+          <div class="appt-rep-stat"><b>${r.demos}</b> demos${r.demoRate != null ? `<span class="appt-rep-stat-pct">${apptPct(r.demoRate)}</span>` : ''}</div>
+          <div class="appt-rep-stat"><b>${r.sales}</b> sales${r.closeRate != null ? `<span class="appt-rep-stat-pct">${apptPct(r.closeRate)}</span>` : ''}</div>
         </div>`;
       repRowsEl.appendChild(row);
     });
