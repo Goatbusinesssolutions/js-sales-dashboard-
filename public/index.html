@@ -1865,12 +1865,12 @@
   // Deep link straight to the contact record in GOAT (this location's
   // white-labeled GoHighLevel CRM) so a rep can open it and result the
   // appointment / update the opportunity without hunting for it.
-  // Standard (non-whitelabeled) GHL app URL pattern — if GOAT's login lives
-  // at a custom domain instead of app.gohighlevel.com, swap the origin
-  // below to match.
+  // GOAT's white-labeled login lives at app.goatbusinesssolutions.com, not
+  // the default GHL app.gohighlevel.com domain — same URL path structure,
+  // just a different origin.
   function goatContactUrl(contactId) {
     if (!contactId || !apptData.locationId) return null;
-    return `https://app.gohighlevel.com/v2/location/${apptData.locationId}/contacts/detail/${contactId}`;
+    return `https://app.goatbusinesssolutions.com/v2/location/${apptData.locationId}/contacts/detail/${contactId}`;
   }
 
   function renderUnresultedList(start, end) {
