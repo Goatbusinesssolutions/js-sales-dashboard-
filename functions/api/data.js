@@ -86,18 +86,24 @@ export async function onRequestGet(context) {
   const { env, ctx } = context;
   const cache = caches.default;
 
-  // Edge cache check FIRST, before touching GOAT at all. Cloudflare's own
-  // cache is the actual fix here — the Cache-Control header alone (below)
-  // only ever told the *browser*/downstream CDNs how to treat the
-  // response; it never made Cloudflare itself store it, so every page load
-  // and every 60s auto-refresh was paying for a full live pull from GOAT.
-  // A hit here means either a recent real visitor or worker/index.js's
-  // cron warmer already paid that cost — see CACHE_KEY's comment for why
-  // this ignores the actual incoming request URL.
-  const cached = await cache.match(CACHE_KEY);
-  if (cached) return cached;
-
   try {
+    // Edge cache check FIRST, before touching GOAT at all. Cloudflare's own
+    // cache is the actual fix here — the Cache-Control header alone (below)
+    // only ever told the *browser*/downstream CDNs how to treat the
+    // response; it never made Cloudflare itself store it, so every page
+    // load and every 60s auto-refresh was paying for a full live pull from
+    // GOAT. A hit here means either a recent real visitor or
+    // worker/index.js's cron warmer already paid that cost — see
+    // CACHE_KEY's comment for why this ignores the actual incoming request
+    // URL. Deliberately inside this same try/catch as the live pull below
+    // (NOT checked before it) — if the Cache API itself ever errors, this
+    // must fall back to a normal live pull rather than crashing the whole
+    // request with an unhandled exception (which is what a 500 with no
+    // JSON body — instead of this function's own error responses — would
+    // mean).
+    const cached = await cache.match(CACHE_KEY);
+    if (cached) return cached;
+
     const result = await loadDashboard(env);
     // Kept short (1 min) so a status change in GOAT shows up promptly (see
     // REFRESH_INTERVAL_MS in index.html) — raise this if GOAT call volume
@@ -106,7 +112,15 @@ export async function onRequestGet(context) {
     // than serving (or extending) an error for a full minute.
     const response = json(result.body, result.status, result.status === 200 ? 60 : undefined);
     if (result.status === 200) {
-      ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
+      // A cache.put failure must not fail the response itself — the
+      // visitor already has their (freshly computed, correct) data;
+      // losing the ability to cache it just means the next request pays
+      // for another live pull, same as if caching didn't exist at all.
+      try {
+        ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
+      } catch (cacheErr) {
+        // ignore — see comment above
+      }
     }
     return response;
   } catch (err) {
