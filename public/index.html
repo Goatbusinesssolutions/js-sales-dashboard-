@@ -401,12 +401,14 @@
   .appt-mode-badge.full { background: var(--series-track); color: var(--series-accent); }
   .appt-mode-badge.modified { background: rgba(208,59,59,0.10); color: var(--critical-text); }
   .appt-range-label { font-size: 11.5px; color: var(--text-muted); margin-bottom: 4px; }
+  .appt-refresh-note { font-size: 10.5px; color: var(--text-muted); margin-left: 4px; }
   /* summary row — the 5 headline metrics (Total/Opportunities/Demos/Sales/
      Unresulted), each clickable to drill into the appointments/contacts
      making up that number. Sits above the detailed 7-bucket breakdown. */
   .appt-summary-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--gridline); border-radius: 10px; overflow: hidden; }
   .appt-summary-tile { background: var(--surface-1); padding: 14px 10px; text-align: center; cursor: pointer; transition: background 0.15s; }
   .appt-summary-tile:hover { background: var(--surface-page); }
+  .appt-summary-tile.active { background: var(--series-track); }
   .appt-summary-label { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 7px; }
   .appt-summary-value { font-size: 22px; font-weight: 750; color: var(--text-primary); letter-spacing: -0.01em; }
   .appt-summary-pct { font-size: 10.5px; color: var(--series-accent); font-weight: 700; margin-top: 4px; line-height: 1.35; }
@@ -416,6 +418,7 @@
   .appt-counts-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--gridline); margin-top: 14px; border-radius: 10px; overflow: hidden; }
   .appt-count-tile { background: var(--surface-1); padding: 12px 8px; text-align: center; cursor: pointer; transition: background 0.15s; }
   .appt-count-tile:hover { background: var(--surface-page); }
+  .appt-count-tile.active { background: var(--series-track); }
   .appt-count-label { font-size: 9px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
   .appt-count-value { font-size: 19px; font-weight: 700; color: var(--text-primary); }
   .appt-rates-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
@@ -754,12 +757,16 @@
             <input type="date" class="appt-select" id="apptCustomEnd">
           </span>
           <span class="appt-mode-badge" id="apptModeBadge">—</span>
+          <button class="icon-btn" id="apptRefreshBtn" title="Refresh now" aria-label="Refresh now">⟳</button>
         </div>
       </div>
-      <div class="appt-range-label" id="apptRangeLabel">—</div>
+      <div class="appt-range-label">
+        <span id="apptRangeLabel">—</span>
+        <span class="appt-refresh-note" id="apptRefreshNote"></span>
+      </div>
 
       <div class="appt-summary-row" id="apptSummaryRow"></div>
-      <div class="footnote" style="margin-top:10px;">Click any number above — or in the detailed breakdown below — to see exactly which appointments/contacts it's made of, each linking straight to the contact in GOAT. Total appointments = every resulted outcome plus Unresulted, for this range.</div>
+      <div class="footnote" style="margin-top:10px;">Click any number above — or in the detailed breakdown below — to see exactly which appointments/contacts it's made of, each linking straight to the contact in GOAT. On the books = every resulted outcome plus Not yet resulted (Unresulted + Upcoming), for this range.</div>
 
       <div class="appt-counts-row" id="apptCountsRow"></div>
       <div class="appt-rates-row" id="apptRatesRow"></div>
@@ -1817,6 +1824,7 @@
     for (const key of ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted']) {
       const tile = document.createElement('div');
       tile.className = 'appt-count-tile';
+      tile.dataset.key = key;
       tile.innerHTML = `<div class="appt-count-label">${APPT_BUCKET_LABELS[key]}</div><div class="appt-count-value">${counts[key] || 0}</div>`;
       tile.addEventListener('click', () => toggleDrilldown(key, APPT_BUCKET_LABELS[key], start, end));
       countsRow.appendChild(tile);
@@ -1981,6 +1989,7 @@
     summary.forEach((s) => {
       const tile = document.createElement('div');
       tile.className = 'appt-summary-tile';
+      tile.dataset.key = s.key;
       tile.innerHTML = `
         <div class="appt-summary-label">${s.label}</div>
         <div class="appt-summary-value">${s.value}</div>
@@ -2020,11 +2029,15 @@
     drilldownOpenLabel = '';
     document.getElementById('apptDrilldownPanel').style.display = 'none';
     document.getElementById('apptDrilldownList').innerHTML = '';
+    document.querySelectorAll('.appt-summary-tile, .appt-count-tile').forEach((t) => t.classList.remove('active'));
   }
 
   function showDrilldownPanel(key, label, records) {
     drilldownOpenKey = key;
     drilldownOpenLabel = label;
+    document.querySelectorAll('.appt-summary-tile, .appt-count-tile').forEach((t) => {
+      t.classList.toggle('active', t.dataset.key === key);
+    });
     const panel = document.getElementById('apptDrilldownPanel');
     const listEl = document.getElementById('apptDrilldownList');
     panel.style.display = 'block';
@@ -2086,7 +2099,26 @@
     return `https://app.goatbusinesssolutions.com/v2/location/${apptData.locationId}/contacts/detail/${contactId}`;
   }
 
-  async function fetchAppointments() {
+  // Timestamps the last successful pull so it's obvious how fresh the
+  // numbers are — the backend caches /api/appointments for 2 minutes (see
+  // functions/api/appointments.js), so a refresh sooner than that can still
+  // show the same numbers; this note sets that expectation instead of it
+  // looking broken.
+  function stampApptRefreshNote() {
+    const now = new Date();
+    document.getElementById('apptRefreshNote').textContent =
+      `· refreshed ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (data may be up to 2 min old)`;
+  }
+
+  // isManual = the ⟳ button was clicked (vs. the 60s auto-refresh below) —
+  // only the manual click spins the icon, matching the sales-$ dashboard's
+  // refreshBtn/fetchAndRender(isManual) pattern above. Re-fetching and
+  // calling renderAppointments() never touches apptRangeSelect/apptCustom
+  // Start/End, so whatever range (including a custom one) is already
+  // selected stays exactly as-is — no page reload, no lost picker state.
+  async function fetchAppointments(isManual) {
+    const refreshBtn = document.getElementById('apptRefreshBtn');
+    if (isManual) refreshBtn.classList.add('spinning');
     try {
       const res = await fetch('/api/appointments', { cache: 'no-store' });
       if (!res.ok) {
@@ -2095,14 +2127,18 @@
       }
       apptData = await res.json();
       renderAppointments();
+      stampApptRefreshNote();
     } catch (err) {
       document.getElementById('apptNote').textContent = `Couldn't load appointment outcomes (${err.message}).`;
+    } finally {
+      if (isManual) refreshBtn.classList.remove('spinning');
     }
   }
 
   document.getElementById('apptRangeSelect').addEventListener('change', renderAppointments);
   document.getElementById('apptCustomStart').addEventListener('change', renderAppointments);
   document.getElementById('apptCustomEnd').addEventListener('change', renderAppointments);
+  document.getElementById('apptRefreshBtn').addEventListener('click', () => fetchAppointments(true));
 
   fetchAppointments();
   setInterval(fetchAppointments, REFRESH_INTERVAL_MS);
