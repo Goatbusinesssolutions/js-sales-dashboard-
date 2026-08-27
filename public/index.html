@@ -1714,7 +1714,7 @@
       loadingBanner.style.display = 'none';
       errorBanner.textContent = latestData
         ? `Couldn't refresh (${err.message}) — showing the last successful pull.`
-        : `Couldn't load dashboard data (${err.message}). Check GHL_API_KEY / GHL_LOCATION_ID on the server.`;
+        : `Couldn't load dashboard data (${err.message}). Check the GOAT connection settings on the server.`;
       errorBanner.style.display = 'flex';
       errorBanner.classList.add('error');
     } finally {
