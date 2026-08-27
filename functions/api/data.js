@@ -111,12 +111,22 @@ export async function onRequestGet(context) {
     if (cached) return cached;
 
     const result = await loadDashboard(env);
-    // Kept short (1 min) so a status change in GOAT shows up promptly (see
-    // REFRESH_INTERVAL_MS in index.html) — raise this if GOAT call volume
-    // ever becomes a concern. Only a successful pull is worth caching; a
-    // transient failure should let the very next request try again rather
-    // than serving (or extending) an error for a full minute.
-    const response = json(result.body, result.status, result.status === 200 ? 60 : undefined);
+    // Raised from 60s to 120s to match the cron warmer's new every-2-minutes
+    // cadence (see wrangler.jsonc's triggers.crons + worker/index.js's
+    // scheduled() — this pull and the much heavier /api/appointments pull
+    // used to both land on the same every-2-minutes tick, since the old
+    // every-1-minute schedule here necessarily overlapped it; that combined
+    // burst was enough to trip GOAT's own rate limit (a 429 even the
+    // retry logic in lib/ghlClient.js couldn't fully absorb). Offsetting
+    // the two crons onto alternating minutes fixes the collision, but only
+    // if this cache lives exactly as long as the gap between this
+    // endpoint's own warms — hence 120s, not 60s. A status change in GOAT
+    // now takes up to 2 minutes to show up instead of 1; that's the
+    // deliberate trade for not periodically failing to load at all. Only a
+    // successful pull is worth caching; a transient failure should let the
+    // very next request try again rather than serving (or extending) an
+    // error for the full window.
+    const response = json(result.body, result.status, result.status === 200 ? 120 : undefined);
     if (result.status === 200) {
       // A cache.put failure must not fail the response itself — the
       // visitor already has their (freshly computed, correct) data;
