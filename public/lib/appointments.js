@@ -1,530 +1,251 @@
-// Appointment-outcome classification and aggregation.
+// Handler for /api/appointments — called from worker/index.js, the actual
+// Cloudflare Worker entry point (see wrangler.jsonc).
 //
-// Turns raw calendar events (Estimate Calendar) + opportunities + tagged
-// contacts into a per-day rollup of outcome buckets, then lets a caller sum
-// any date range (day/week/month/year/custom) out of that rollup and
-// compute rates. This mirrors, field-for-field, a Python prototype that was
-// validated against a real one-time pull of this location's data (1,627
-// calendar events, 6,526 opportunities, 2,605 tagged contacts) before being
-// ported here — see the project's design notes for that verification run.
-//
-// Business rules (confirmed with the client, GHL location WXp6Vk4nCuljh1ZHTP4l):
-//   Sold      = opportunity status "won" — dated by WON DATE, not by the
-//               calendar appointment's date (see mergeWonSalesIntoDaily).
-//               A deal that closed with no matching calendar appointment at
-//               all still counts as a sale (and a demo, for rate math) on
-//               the day it actually won — this is also why the Sold rep
-//               breakdown is attributed to the opportunity's own assignedTo,
-//               not the appointment's assignedUserId; they're occasionally
-//               different people.
-//   DNS       = opportunity status "open" AND pipeline stage is a
-//               DNS-equivalent stage (estimate/price already given, still
-//               being worked): "Rep Working", "Rehash" (Leads Pipeline), or
-//               "Estimate Sent" (Leads Commercial pipeline)
-//   No Show   = calendar appointmentStatus "noshow" (folds in "one leg" —
-//               GHL has no separate tracking for that distinction; both
-//               result in the same tuple per the training manual — Opp
-//               unchanged, does not count as an opportunity — so folding
-//               them together doesn't change any rate math)
-//   IncTime   = "Inconvenient Time" — calendar appointmentStatus "invalid"
-//               AND contact carries the "inc time" tag. The whole buying
-//               committee was present but no demo/price was given (contact
-//               was tied up, unwell, etc.). Appointment resets same as
-//               No Show/One Leg, but — unlike those — DOES count as an
-//               opportunity, because a decision-maker was in front of the
-//               advisor. The opportunity itself stays open/unchanged (only
-//               its stage moves to Reset), which is why this is checked off
-//               the tag rather than off opportunity status the way NI/NQ
-//               are below.
-//   NI        = opportunity status "lost" (post-fix), or a "not interested"
-//               family tag when no opportunity exists (pre-fix fallback)
-//   NQ        = opportunity status "abandoned" (post-fix), or a
-//               "not qualified" family tag when no opportunity exists
-//   Unresulted = showed appointment that doesn't fit any bucket above — a
-//               data-quality signal, not a business outcome. Excluded from
-//               rate math and reported as its own count.
-//   Excluded  = calendar appointmentStatus "cancelled" or "invalid"
-//   Upcoming  = "confirmed"/"new" status with a future startTime
-//
-// Before 2026-08-16 the automation that applies NI/NQ tags DELETED the
-// opportunity instead of changing its status, so NI/NQ counts (and the tag
-// fallback) are incomplete for appointments before that date. Sold/DNS/
-// NoShow are unaffected and reconstructable at any date. See computeRates:
-// ranges that include any pre-fix date use "modified mode", which drops
-// NI/NQ from the math entirely rather than report unreliable numbers.
-// (Inc. Time is a workflow the client only started using in 2026-08 — it
-// has no meaningful pre-fix history either way.)
+// Separate from /api/data (the dollar-totals dashboard) on purpose: this
+// endpoint is far more expensive to compute (see the budget note below), so
+// it gets its own, much longer edge cache instead of slowing down or
+// competing with the sales-dashboard pull.
 
-export const REP_WORKING_STAGE_ID = '6b0d75db-07bf-4fe4-a2f2-2950a0aa2799';
-export const REHASH_STAGE_ID = 'ad2903ec-58ee-42f7-9779-2090dedac88f';
-export const ESTIMATE_SENT_STAGE_ID = '7f1052d1-278c-470a-b04c-645ce5f8c955';
-const DNS_STAGE_IDS = new Set([REP_WORKING_STAGE_ID, REHASH_STAGE_ID, ESTIMATE_SENT_STAGE_ID]);
+import { fetchAllOpportunities, fetchCalendarEvents, fetchTaggedContacts, getUserName } from '../../lib/ghlClient.js';
+import { classifyEvents, rollupByDay, mergeWonSalesIntoDaily, describeReason, DEFAULT_ESTIMATE_CALENDAR_ID, DEFAULT_FIX_DATE } from '../../lib/appointments.js';
+import { extractWonRecords, rollupSalesDaily } from '../../lib/aggregate.js';
+import { repNames } from '../../lib/reps.js';
 
-const NI_TAGS = new Set(['not interested', 'no intereest', 'no interest', 'nor interested', 'not intersted']);
-const NQ_TAGS = new Set([
+// Every typo variant seen in this location's tag list for each family (see
+// lib/appointments.js for how these are used: NI/NQ as a fallback when an
+// opportunity was deleted by the pre-fix automation instead of having its
+// status changed; "inc time" as the ONLY signal for that bucket, since
+// Inc. Time doesn't touch the opportunity's status at all). This list has
+// to include every tag lib/appointments.js checks for, because
+// fetchTaggedContacts only pulls contacts carrying one of these tags in
+// the first place — a tag missing here means classifyEvents can never see
+// it, live, no matter what the classification code checks for.
+const NI_NQ_TAG_NAMES = [
+  'not interested', 'no intereest', 'no interest', 'nor interested', 'not intersted',
   'not qualified', 'not qualified credit', 'not qualified does not own',
   'not qualified out of area', 'not qualified repair', 'not qualifed', 'not  qualified',
-]);
-const INC_TIME_TAGS = new Set(['inc time', 'inc. time', 'inconvenient time']);
+  'inc time', 'inc. time', 'inconvenient time',
+];
 
-export const DEFAULT_ESTIMATE_CALENDAR_ID = 'esfjNW6NLDhVB7MRgbVb';
-export const DEFAULT_FIX_DATE = '2026-08-16';
+// A fixed, made-up URL used only as a lookup key for Cloudflare's edge
+// Cache API (caches.default) — see the matching constant + comment in
+// functions/api/data.js for why this ignores the real request URL.
+const CACHE_KEY = new Request('https://js-dashboard-cache.internal/api/appointments');
 
-const BUCKET_KEYS = ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted', 'Excluded', 'Upcoming'];
-
-// Human-readable names for pipeline stage ids that show up in "Unresulted"
-// notes, so a manager reading the drill-down list doesn't have to memorize
-// GHL's internal stage ids. Not exhaustive — any stage not in this map
-// falls back to showing its raw id.
-export const STAGE_NAMES = {
-  [REP_WORKING_STAGE_ID]: 'Rep Working',
-  [REHASH_STAGE_ID]: 'Rehash',
-  [ESTIMATE_SENT_STAGE_ID]: 'Estimate Sent',
-  '32897848-90bc-4767-9ea5-b1b70b3c956a': 'Insurance Working',
-  '1f6d8d6f-b626-4bcd-9039-e46fdf52ade3': 'Warm Leads',
-  '9e09d076-40bd-4bec-80a1-e78b6813125d': 'Closed Canceled',
-  '19da1a42-58ee-4e1e-87d8-7bc715aa0c30': 'Audit / Material Pickup / Review / Referrals / Marketing',
-  '5af5b875-cbfd-4e9e-a5c5-da19800e2cc3': 'Reset',
-  '95d77cb4-8cc1-48b9-b41e-bca33cbb70d4': 'Appointment Scheduled',
-  '7ac22062-6566-429d-9969-03a08e80e92d': 'Needs Financing',
-};
-
-/** Turn a classifyEvent() note into plain English for the Unresulted drill-down list. */
-export function describeReason(note) {
-  if (!note) return 'Needs a result on the calendar';
-  if (note === 'past-due-unstatused') return "Appointment date passed but was never marked showed / no-show on the calendar";
-  if (note === 'no-opp-no-tag') return 'No linked deal, and no Not Interested / Not Qualified tag found';
-  if (note === 'tag-fallback-no-opp') return 'Classified from a tag on the contact — no linked deal found';
-  if (note === 'superseded-by-later-appointment') return 'Estimate appointment was later reset and re-booked';
-  if (note.startsWith('opp-open-other-stage:')) {
-    const stageId = note.slice('opp-open-other-stage:'.length);
-    return `Linked deal is open in the "${STAGE_NAMES[stageId] || stageId}" stage — needs to move to Rep Working/Rehash, Won, Lost, or Abandoned`;
-  }
-  return note;
+function json(data, status, cacheSeconds) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (cacheSeconds) headers['Cache-Control'] = `public, s-maxage=${cacheSeconds}, stale-while-revalidate=300`;
+  return new Response(JSON.stringify(data), { status, headers });
 }
 
-function emptyCounts() {
-  const c = {};
-  for (const k of BUCKET_KEYS) c[k] = 0;
-  return c;
+function todayStrInTZ(tz) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
-function buildOppsByContact(opportunities) {
-  const map = new Map();
-  for (const o of opportunities) {
-    const cid = o.contactId;
-    if (!cid) continue;
-    if (!map.has(cid)) map.set(cid, []);
-    map.get(cid).push(o);
-  }
-  return map;
-}
-
-function buildTagsByContact(taggedContacts) {
-  const map = new Map();
-  for (const c of taggedContacts) {
-    map.set(c.id, new Set(c.tags || []));
-  }
-  return map;
-}
-
-// How close (in days) an opportunity's createdAt has to be to another
-// opportunity for the same contact — the "anchor", see below — to be
-// considered part of the same engagement. Wide enough to catch a same-visit
-// multi-estimate (two quotes created minutes apart), narrow enough to
-// exclude a repeat customer's old, unrelated job (which in practice show up
-// months or years apart, not days).
-const OPP_ENGAGEMENT_WINDOW_DAYS = 7;
-
-function daysBetween(dateStrA, dateStrB) {
-  if (!dateStrA || !dateStrB) return Infinity;
-  const a = new Date(dateStrA + 'T00:00:00Z').getTime();
-  const b = new Date(dateStrB + 'T00:00:00Z').getTime();
-  if (Number.isNaN(a) || Number.isNaN(b)) return Infinity;
-  return Math.abs(a - b) / 86400000;
-}
-
-/**
- * Pick the opportunity that best represents a contact's current outcome —
- * prefer won, else prefer any opportunity sitting in a DNS-equivalent
- * stage, else the most recently updated.
- *
- * A contact can carry more than one opportunity record for what was really
- * one appointment: e.g. an advisor quotes both a metal-roof option and a
- * shingle-roof option in the same visit, and each gets its own opportunity.
- * If neither has been won yet, "most recently updated" alone is an
- * arbitrary tie-breaker — whichever record someone happened to touch last
- * — and can flip an appointment between DNS and Unresulted depending on
- * which of the two got edited more recently, even though an estimate was
- * genuinely given either way. Checking for DNS-equivalent stages first
- * fixes that: "was an estimate given on at least one of the options" is
- * true regardless of what the other, still-undecided option's stage says.
- *
- * A contact can ALSO carry opportunities from entirely separate, unrelated
- * engagements spread out over time — a repeat customer whose roof job sold
- * a year ago booking a brand-new gutter job today, for instance. "Prefer
- * won" alone can't tell those apart from the same-visit case above: it'll
- * grab the old, already-closed job's opportunity (and dollar value) for a
- * brand new appointment that hasn't been resulted yet, even though a
- * separate, still-open opportunity for the new job exists right there.
- * Fixed the same way as the same-visit case, generalized: first find
- * whichever opportunity was created closest to THIS appointment (the
- * "anchor"), then only pool in siblings created within
- * OPP_ENGAGEMENT_WINDOW_DAYS of that anchor before applying the won / DNS
- * / most-recent tie-break — so an old unrelated deal can't outrank a brand
- * new one just because it happens to be won.
- */
-function pickOpportunity(contactId, oppsByContact, apptDateStr) {
-  const opps = oppsByContact.get(contactId);
-  if (!opps || !opps.length) return null;
-
-  let pool = opps;
-  if (apptDateStr && opps.length > 1) {
-    let anchor = null;
-    for (const o of opps) {
-      const created = (o.createdAt || '').slice(0, 10);
-      if (!created) continue;
-      if (!anchor || daysBetween(created, apptDateStr) < daysBetween((anchor.createdAt || '').slice(0, 10), apptDateStr)) {
-        anchor = o;
-      }
-    }
-    if (anchor) {
-      const anchorCreated = (anchor.createdAt || '').slice(0, 10);
-      pool = opps.filter((o) => daysBetween((o.createdAt || '').slice(0, 10), anchorCreated) <= OPP_ENGAGEMENT_WINDOW_DAYS);
-    }
-  }
-
-  const won = pool.filter((o) => o.status === 'won');
-  if (won.length) return mostRecentlyUpdated(won);
-
-  const dnsStageOpen = pool.filter((o) => o.status === 'open' && DNS_STAGE_IDS.has(o.pipelineStageId));
-  if (dnsStageOpen.length) return mostRecentlyUpdated(dnsStageOpen);
-
-  return mostRecentlyUpdated(pool);
-}
-
-function mostRecentlyUpdated(opps) {
-  let best = null;
-  for (const o of opps) {
-    if (!best || (o.updatedAt || '') > (best.updatedAt || '')) best = o;
-  }
-  return best;
-}
-
-function tagFallback(contactId, tagsByContact) {
-  const tags = tagsByContact.get(contactId);
-  if (!tags) return null;
-  for (const t of tags) if (NI_TAGS.has(t)) return 'NI';
-  for (const t of tags) if (NQ_TAGS.has(t)) return 'NQ';
-  return null;
-}
-
-function hasIncTimeTag(contactId, tagsByContact) {
-  const tags = tagsByContact.get(contactId);
-  if (!tags) return false;
-  for (const t of tags) if (INC_TIME_TAGS.has(t)) return true;
-  return false;
-}
-
-/** Classify a single calendar event. todayStr = 'YYYY-MM-DD' pull-time cutoff. */
-export function classifyEvent(ev, oppsByContact, tagsByContact, todayStr) {
-  const status = ev.appointmentStatus;
-  const start = (ev.startTime || '').slice(0, 10);
-
-  if (status === 'noshow') return { bucket: 'NoShow', note: null };
-  if (status === 'cancelled') return { bucket: 'Excluded', note: null };
-  if (status === 'invalid') {
-    const invCid = ev.contactId;
-    // Inc. Time is checked first and off the tag alone: unlike NI/NQ, the
-    // linked opportunity's status is NOT touched by this workflow (it stays
-    // open, only its stage moves to Reset) — the buying committee was
-    // present, so it's still a live opportunity being rescheduled, not a
-    // lost/abandoned one. So opportunity status can't tell Inc. Time apart
-    // from any other 'invalid' event; the "inc time" tag is the only
-    // authoritative signal for it.
-    if (hasIncTimeTag(invCid, tagsByContact)) return { bucket: 'IncTime', note: null };
-    // The NI/NQ tag workflows result the appointment as 'invalid' AND set
-    // the linked opportunity's status (lost for NI, abandoned for NQ) in
-    // the same automation, so once status is 'invalid' the opportunity's
-    // status is the authoritative signal for telling NI from NQ. Not every
-    // 'invalid' event traces back to that workflow though, so fall back to
-    // Excluded when there's no linked opp or it's in some other status.
-    const invOpp = pickOpportunity(invCid, oppsByContact, start);
-    if (invOpp) {
-      if (invOpp.status === 'lost') return { bucket: 'NI', note: null };
-      if (invOpp.status === 'abandoned') return { bucket: 'NQ', note: null };
-    }
-    // Pre-fix-date events: the old automation deleted the opportunity
-    // instead of changing its status, so there's nothing to look up. Fall
-    // back to the same tag-based signal used elsewhere for that era.
-    const invFb = tagFallback(invCid, tagsByContact);
-    if (invFb) return { bucket: invFb, note: 'tag-fallback-invalid-no-opp' };
-    return { bucket: 'Excluded', note: null };
-  }
-  if (status === 'confirmed' || status === 'new') {
-    if (start && start < todayStr) return { bucket: 'Unresulted', note: 'past-due-unstatused' };
-    return { bucket: 'Upcoming', note: null };
-  }
-  if (status !== 'showed') return { bucket: 'Excluded', note: `unknown-status:${status}` };
-
-  const cid = ev.contactId;
-  const opp = pickOpportunity(cid, oppsByContact, start);
-  if (opp) {
-    const ostatus = opp.status;
-    const stage = opp.pipelineStageId;
-    if (ostatus === 'won') return { bucket: 'Sold', note: null, value: opp.monetaryValue || 0 };
-    if (ostatus === 'open' && DNS_STAGE_IDS.has(stage)) return { bucket: 'DNS', note: null };
-    if (ostatus === 'lost') return { bucket: 'NI', note: null };
-    if (ostatus === 'abandoned') return { bucket: 'NQ', note: null };
-    return { bucket: 'Unresulted', note: `opp-open-other-stage:${stage}` };
-  }
-  const fb = tagFallback(cid, tagsByContact);
-  if (fb) return { bucket: fb, note: 'tag-fallback-no-opp' };
-  return { bucket: 'Unresulted', note: 'no-opp-no-tag' };
-}
-
-/**
- * Classify a raw list of calendar events (any calendar) against
- * opportunities + tagged contacts. Returns a flat array of
- * { date, bucket, assignedUserId, note } — deleted events and events on a
- * different calendar are dropped.
- *
- * Reset-and-retry appointments: when a DNS/Rehash deal gets reset and a
- * NEW appointment is booked to attempt the sale again, that contact ends
- * up with more than one "showed" event on the calendar, all pointing at
- * the SAME opportunity record. Classifying every one of those events off
- * the opportunity's *current* status would let a later successful re-sell
- * retroactively turn the earlier estimate appointment into a "Sold" too —
- * wrong, since that earlier appointment is exactly what DNS means (an
- * estimate was given, not yet sold, reset to try again). So: only the
- * most recent showed appointment for a contact is evaluated against the
- * opportunity/tag state — it "stands on its own." Every earlier showed
- * appointment for that same contact is classified as DNS outright.
- */
-export function classifyEvents(events, opportunities, taggedContacts, opts = {}) {
-  const calendarId = opts.calendarId || DEFAULT_ESTIMATE_CALENDAR_ID;
-  const todayStr = opts.todayStr;
-  if (!todayStr) throw new Error('classifyEvents requires opts.todayStr (YYYY-MM-DD)');
-
-  const oppsByContact = buildOppsByContact(opportunities);
-  const tagsByContact = buildTagsByContact(taggedContacts);
-
-  const relevant = events.filter((ev) => ev.calendarId === calendarId && !ev.deleted);
-
-  const showedByContact = new Map();
-  for (const ev of relevant) {
-    if (ev.appointmentStatus !== 'showed') continue;
-    if (!showedByContact.has(ev.contactId)) showedByContact.set(ev.contactId, []);
-    showedByContact.get(ev.contactId).push(ev);
-  }
-  const latestShowedEventId = new Map(); // contactId -> id of that contact's most recent showed event
-  for (const [cid, evs] of showedByContact.entries()) {
-    if (evs.length < 2) continue;
-    evs.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
-    latestShowedEventId.set(cid, evs[evs.length - 1].id);
-  }
-
-  const results = [];
-  for (const ev of relevant) {
-    let bucket, note, value;
-    const isSupersededShowed =
-      ev.appointmentStatus === 'showed' &&
-      latestShowedEventId.has(ev.contactId) &&
-      latestShowedEventId.get(ev.contactId) !== ev.id;
-    if (isSupersededShowed) {
-      bucket = 'DNS';
-      note = 'superseded-by-later-appointment';
-      value = 0;
-    } else {
-      ({ bucket, note, value } = classifyEvent(ev, oppsByContact, tagsByContact, todayStr));
-    }
-    results.push({
-      id: ev.id,
-      date: (ev.startTime || '').slice(0, 10),
-      bucket,
-      assignedUserId: ev.assignedUserId || 'unassigned',
-      contactId: ev.contactId || null,
-      title: ev.title || '',
-      note,
-      // Dollar value of the won opportunity, only meaningful when
-      // bucket === 'Sold' (0 for every other bucket). Attributed to the
-      // appointment's own date and assigned rep — NOT the opportunity's
-      // Won Date/assignedTo used by the sales-$ dashboard above, so this
-      // can differ slightly from that section's totals for the same rep.
-      value: value || 0,
-    });
-  }
-  return results;
-}
-
-/**
- * Roll a flat classified list up into { 'YYYY-MM-DD': { counts, byRep } }.
- * This is the compact payload shape sent to the client — the client sums
- * whatever date range the picker selects out of this object rather than
- * re-fetching per range.
- *
- * 'Sold' entries are deliberately NOT tallied here, even though
- * classifyEvent still labels an appointment tied to a won deal as 'Sold'
- * (that label stays on the flat per-event record — useful metadata). The
- * Sold bucket's count and dollar value come entirely from a separate pass
- * over won opportunities by Won Date instead — see mergeWonSalesIntoDaily,
- * always called right after this. Two reasons: (1) a deal almost never
- * closes on the same day as its estimate appointment, so pinning $ Sold to
- * the appointment date makes it disagree with the sales-$ dashboard (which
- * is Won-Date based) for the exact same period — the business wants these
- * two numbers to always match; (2) a deal that closed with no matching
- * calendar appointment at all (no estimate ever booked, or booked outside
- * this calendar) previously never showed up as a sale anywhere in this
- * section — now it does, credited as a sale (and a demo, for the rate math)
- * on the day it actually won.
- */
-export function rollupByDay(classified) {
-  const days = {};
-  for (const r of classified) {
-    if (!r.date) continue;
-    if (r.bucket === 'Sold') continue;
-    if (!days[r.date]) days[r.date] = { counts: emptyCounts(), byRep: {}, soldValue: 0, byRepValue: {} };
-    const day = days[r.date];
-    day.counts[r.bucket] = (day.counts[r.bucket] || 0) + 1;
-    const rep = r.assignedUserId || 'unassigned';
-    if (!day.byRep[rep]) day.byRep[rep] = emptyCounts();
-    day.byRep[rep][r.bucket] = (day.byRep[rep][r.bucket] || 0) + 1;
-  }
-  return days;
-}
-
-/**
- * Merge a "won opportunities by Won Date" rollup — the SAME data structure
- * that powers the sales-$ dashboard's daily series (rollupSalesDaily /
- * extractWonRecords in lib/aggregate.js: `{ 'YYYY-MM-DD': { total, count,
- * byRep: { userId: { total, count } } } }`) — into an appointment-outcomes
- * daily rollup's Sold bucket. This is the ONLY source rollupByDay's Sold
- * count/value get filled from, which is what guarantees $ Sold here always
- * exactly matches the sales-$ dashboard for the same date range: same
- * opportunities, same Won Date extraction, same math, not a coincidence.
- *
- * Mutates and returns `daily`. Adds a day entry if one doesn't already
- * exist (a won deal can land on a date with zero calendar appointments at
- * all — it still needs to show up).
- */
-export function mergeWonSalesIntoDaily(daily, salesDaily) {
-  for (const date of Object.keys(salesDaily || {})) {
-    const s = salesDaily[date];
-    if (!s || !s.count) continue;
-    if (!daily[date]) daily[date] = { counts: emptyCounts(), byRep: {}, soldValue: 0, byRepValue: {} };
-    const day = daily[date];
-    day.counts.Sold = (day.counts.Sold || 0) + s.count;
-    day.soldValue = (day.soldValue || 0) + (s.total || 0);
-    for (const rep of Object.keys(s.byRep || {})) {
-      // rollupSalesDaily keys unassigned deals 'UNASSIGNED'; this module's
-      // convention (assignedUserId || 'unassigned') is lowercase — normalize
-      // so an unassigned rep doesn't split into two separate rows client-side.
-      const repKey = rep === 'UNASSIGNED' ? 'unassigned' : rep;
-      if (!day.byRep[repKey]) day.byRep[repKey] = emptyCounts();
-      day.byRep[repKey].Sold = (day.byRep[repKey].Sold || 0) + s.byRep[rep].count;
-      day.byRepValue[repKey] = (day.byRepValue[repKey] || 0) + (s.byRep[rep].total || 0);
-    }
-  }
-  return daily;
-}
-
-/** Sum a daily rollup over [startDate, endDate] inclusive, both 'YYYY-MM-DD'. */
-export function sumRange(daily, startDate, endDate) {
-  const counts = emptyCounts();
-  const byRep = {};
-  let soldValue = 0;
-  const byRepValue = {};
-  for (const date of Object.keys(daily)) {
-    if (date < startDate || date > endDate) continue;
-    const day = daily[date];
-    for (const k of BUCKET_KEYS) counts[k] += day.counts[k] || 0;
-    soldValue += day.soldValue || 0;
-    for (const rep of Object.keys(day.byRep)) {
-      if (!byRep[rep]) byRep[rep] = emptyCounts();
-      for (const k of BUCKET_KEYS) byRep[rep][k] += day.byRep[rep][k] || 0;
-    }
-    for (const rep of Object.keys(day.byRepValue || {})) {
-      byRepValue[rep] = (byRepValue[rep] || 0) + day.byRepValue[rep];
-    }
-  }
-  return { counts, byRep, soldValue, byRepValue };
-}
-
-/**
- * Rate formulas per the GOAT training manual ("How You're Measured", p.11):
- *   Counts as an opportunity      = Sold, DNS, Inc. Time, Not Interested
- *   Does NOT count as an opportunity = No Show, One Leg (folded into
- *                                    NoShow — see the bucket comment up top),
- *                                    any Not Qualified
- *   Opportunity rate   = Opportunities / Appointments (all resulted)
- *   Demo-to-opp rate   = Estimates sent / Opportunities
- *   Close rate         = Sales / Estimates sent  (= Sold / (Sold+DNS) —
- *                         NOT divided by the opportunity pool; Not
- *                         Interested/Inc. Time never had an estimate sent,
- *                         so they don't belong in this denominator even
- *                         though they count as opportunities above)
- * Worked example in the manual: 20 appointments, 4 Sold + 7 DNS + 1 Inc.
- * Time + 2 NI + 3 No Show + 1 One Leg + 2 NQ -> 14 opportunities, 11
- * estimates sent (Sold+DNS), Opp rate 70%, Demo-to-opp 78.6%, Close rate
- * 4/11 = 36.4%.
- *
- * Full mode (ranges entirely on/after the fix date): NI/NQ trusted.
- *   Opp rate       = (Sold+DNS+IncTime+NI) / all resulted
- *                     (Sold+DNS+NoShow+IncTime+NI+NQ)
- *   Demo-to-opp rate = (Sold+DNS) / (Sold+DNS+IncTime+NI)
- *   Close rate     = Sold / (Sold+DNS)
- *
- * Modified mode (range touches any pre-fix date): NI/NQ unreliable
- * (opportunity could've been silently deleted), so they're dropped from
- * the math entirely rather than reported wrong. (Inc. Time is a brand-new
- * workflow with no real pre-fix history, so it's left out of modified mode
- * too rather than adding a third unreliable term.)
- *   Modified demo rate  = (Sold+DNS) / (Sold+DNS+NoShow)
- *   Modified close rate = Sold / (Sold+DNS)
- */
-export function computeRates(counts, mode) {
-  const sold = counts.Sold || 0;
-  const dns = counts.DNS || 0;
-  const noShow = counts.NoShow || 0;
-  const incTime = counts.IncTime || 0;
-  const ni = counts.NI || 0;
-  const nq = counts.NQ || 0;
-  const resulted = sold + dns + noShow + incTime + ni + nq;
-  const estimatesSent = sold + dns;
-
-  if (mode === 'full') {
-    const oppPool = sold + dns + incTime + ni;
-    return {
-      mode: 'full',
-      resulted,
-      oppRate: resulted ? oppPool / resulted : null,
-      demoToOppRate: oppPool ? estimatesSent / oppPool : null,
-      closeRate: estimatesSent ? sold / estimatesSent : null,
-    };
-  }
-
-  const demoPool = sold + dns + noShow;
+// See the matching helper + comment in functions/api/data.js. Takes the
+// already-resolved apiKey/locationId strings, since GHL_API_KEY is now a
+// Secrets Store binding (an object with .get()), not a plain string.
+function missingEnvDetail(apiKey, locationId) {
+  // The `error` string here is what actually reaches the browser (see
+  // index.html's fetchAppointments, which only ever displays body.error) —
+  // so it must stay GOAT-branded, not name the underlying env vars. The
+  // `debug` object below is server-side diagnostic detail only (never
+  // rendered in the UI), so it's fine for it to use the real Cloudflare
+  // binding names for whoever's actually troubleshooting the config.
+  const missingLabels = [];
+  if (!apiKey) missingLabels.push('API key');
+  if (!locationId) missingLabels.push('location ID');
   return {
-    mode: 'modified',
-    resulted,
-    modifiedDemoRate: demoPool ? estimatesSent / demoPool : null,
-    modifiedCloseRate: estimatesSent ? sold / estimatesSent : null,
+    error: `Can't connect to GOAT right now — missing ${missingLabels.join(' and ')} in the server configuration. This needs to be fixed in the Cloudflare setup, not in GOAT itself — contact whoever manages the dashboard.`,
+    debug: {
+      GHL_API_KEY: apiKey
+        ? `present, length ${apiKey.length}${apiKey.trim() !== apiKey ? ' — HAS LEADING/TRAILING WHITESPACE, re-paste it' : ''}`
+        : 'MISSING (binding not resolving — Secrets Store secret may still be Pending, or store_id/secret_name in wrangler.jsonc is wrong)',
+      GHL_LOCATION_ID: locationId ? `present: "${locationId}"` : 'MISSING (undefined or empty string)',
+    },
   };
 }
 
-/** Whole-range mode: 'full' only if every day in range is >= fixDate. */
-export function modeForRange(startDate, fixDate) {
-  return startDate >= fixDate ? 'full' : 'modified';
+// Does the actual GOAT pull + classification — no knowledge of caching or
+// HTTP status codes. Split out from onRequestGet so the cache-lookup/
+// cache-store wrapper below stays simple, and so worker/index.js's cron
+// `scheduled` warmer (see wrangler.jsonc's triggers.crons) can run this
+// same expensive computation proactively instead of a visitor ever
+// triggering it live.
+async function loadAppointments(env) {
+    // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not
+    // a plain string — .get() is what actually fetches the secret value.
+    const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
+    const locationId = env.GHL_LOCATION_ID;
+    if (!apiKey || !locationId) {
+      return { status: 500, body: missingEnvDetail(apiKey, locationId) };
+    }
+
+    const tz = env.DASHBOARD_TZ || 'America/New_York';
+    const calendarId = env.GHL_ESTIMATE_CALENDAR_ID || DEFAULT_ESTIMATE_CALENDAR_ID;
+    const fixDate = env.APPOINTMENTS_FIX_DATE || DEFAULT_FIX_DATE;
+    // How far back to pull calendar events. Bounded by an env var (not a
+    // hardcoded "since the calendar began") because every extra month here
+    // is ~1 more GHL API call — see the budget note below.
+    const historyDays = Number(env.APPOINTMENTS_HISTORY_DAYS) || 260;
+
+    const todayStr = todayStrInTZ(tz);
+    const endMs = Date.now();
+    const startMs = endMs - historyDays * 24 * 60 * 60 * 1000;
+
+    // ---- GHL API subrequest budget ----
+    // This endpoint pulls ALL opportunities (every status, not just won —
+    // classification needs an opportunity's *current* stage), every
+    // contact carrying an NI/NQ-family tag, and every event on the
+    // Estimate Calendar in the history window. That's roughly 90-120 GHL
+    // API calls per cache miss (vs ~15-20 for /api/data), and it grows
+    // slowly over time as the location adds more opportunities/contacts.
+    // Cloudflare's free Workers plan caps a single request at 50
+    // subrequests, and a cache miss here already exceeds that on its own —
+    // this endpoint requires Workers Paid ($5/mo, 1000-subrequest cap)
+    // regardless of cache duration. If you ever need to cut the per-pull
+    // cost instead, lower APPOINTMENTS_HISTORY_DAYS. The 2-minute cache
+    // below is a deliberate tradeoff — short enough that a status change
+    // in GOAT shows up within a couple of client polls (see
+    // REFRESH_INTERVAL_MS in index.html), long enough that this expensive
+    // pull doesn't re-run on literally every poll from every open tab.
+    //
+    // Fetched ONE AT A TIME, not via Promise.all. This used to run all
+    // three pulls concurrently — each one already paces its OWN internal
+    // pagination (see PAGE_GAP_MS in lib/ghlClient.js), but running three
+    // separately-paced loops at the same time still adds their request
+    // rates together against GOAT's one shared per-location rate limit,
+    // which is exactly the kind of burst that was tripping the 429 even
+    // after every earlier fix to the pacing *within* a single loop. This
+    // is slower wall-clock (a cold cache miss here can now take up to a
+    // minute or so) but that time is pure network/await time, not CPU
+    // time Cloudflare bills or limits — and it's the only way to actually
+    // keep this endpoint's own total request rate to GOAT bounded, rather
+    // than tripling it right when the very first call of each loop goes
+    // out. A real visitor almost never pays this cost directly, since the
+    // cron warmer (see worker/index.js) does it in the background ahead of
+    // time in the overwhelming majority of cases.
+    const opportunities = await fetchAllOpportunities(locationId, apiKey);
+    const events = await fetchCalendarEvents(locationId, apiKey, calendarId, startMs, endMs);
+    const taggedContacts = await fetchTaggedContacts(locationId, apiKey, NI_NQ_TAG_NAMES);
+
+    const classified = classifyEvents(events, opportunities, taggedContacts, { calendarId, todayStr });
+    const daily = rollupByDay(classified);
+    // Sold ($ and count) is sourced entirely from won opportunities by Won
+    // Date — the exact same derivation /api/data uses — not from calendar
+    // events, so this section's $ Sold always matches the sales-$ dashboard
+    // for the same range, and a won deal with no matching appointment still
+    // shows up. `opportunities` here already includes every status (fetched
+    // above for classification), so this is free — no extra GHL calls.
+    const wonRecords = extractWonRecords(opportunities, { tz });
+    mergeWonSalesIntoDaily(daily, rollupSalesDaily(wonRecords));
+
+    // Drill-down lists — a bucket count alone doesn't tell anyone WHICH
+    // appointment/contact it's made of. Every bucket except Sold gets one
+    // row per classified calendar appointment, newest first (most
+    // actionable). Sold is deliberately excluded here and sourced from
+    // `sold` below instead — see the big comment on `wonRecords` above:
+    // the Sold COUNT in `daily` comes from won-by-Won-Date, not from these
+    // calendar-classified 'Sold' events, so a calendar-based Sold list here
+    // would occasionally disagree with the Sold count shown next to it.
+    // No hard cap: this location's per-bucket counts are in the low
+    // hundreds to low thousands at most, so the payload stays small.
+    const outcomeEvents = classified
+      .filter((r) => r.bucket !== 'Sold')
+      .map((r) => ({
+        date: r.date,
+        bucket: r.bucket,
+        title: r.title,
+        contactId: r.contactId,
+        assignedUserId: r.assignedUserId,
+        reason: r.bucket === 'Unresulted' ? describeReason(r.note) : null,
+      }))
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+    // Sold drill-down — sourced from the SAME won-by-Won-Date records that
+    // drive the Sold count/value above (wonRecords), not from `classified`,
+    // so this list's length always exactly matches the Sold count it's
+    // attached to.
+    const sold = wonRecords
+      .map((r) => ({
+        date: r.wonDate,
+        title: r.name,
+        contactId: r.contactId,
+        assignedUserId: r.assignedTo || 'unassigned',
+        value: r.monetaryValue,
+      }))
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+    // Resolve any rep not already in the static reps.js cache (e.g. a new
+    // hire) via a live lookup, same pattern as /api/data's leaderboard.
+    const repIds = new Set();
+    for (const day of Object.values(daily)) {
+      for (const rep of Object.keys(day.byRep)) repIds.add(rep);
+    }
+    for (const r of outcomeEvents) repIds.add(r.assignedUserId);
+    for (const r of sold) repIds.add(r.assignedUserId);
+    const names = { ...repNames };
+    await Promise.all([...repIds].map(async (id) => {
+      if (id === 'unassigned' || names[id]) return;
+      names[id] = await getUserName(id, apiKey);
+    }));
+
+    return {
+      status: 200,
+      body: {
+        asOf: new Date().toISOString(),
+        tz,
+        fixDate,
+        calendarId,
+        locationId,
+        historyStart: new Date(startMs).toISOString().slice(0, 10),
+        daily,
+        // Per-appointment drill-down data — every classified calendar
+        // appointment except Sold (`events`), plus the authoritative
+        // won-by-Won-Date Sold list (`sold`). The client unions these by
+        // whichever bucket (or virtual group like "Opportunities"/"Demos")
+        // the visitor clicked on, filtered to the currently selected date
+        // range — see goatContactUrl/openDrilldown in index.html.
+        events: outcomeEvents,
+        sold,
+        reps: names,
+      },
+    };
 }
 
-/** Build the full report (overall + per-rep) for one date range. */
-export function reportForRange(daily, startDate, endDate, fixDate) {
-  const { counts, byRep } = sumRange(daily, startDate, endDate);
-  const mode = modeForRange(startDate, fixDate);
-  const rates = computeRates(counts, mode);
-  const reps = {};
-  for (const rep of Object.keys(byRep)) {
-    reps[rep] = { counts: byRep[rep], rates: computeRates(byRep[rep], mode) };
+export async function onRequestGet(context) {
+  const { env, ctx } = context;
+  const cache = caches.default;
+
+  try {
+    // Edge cache check FIRST, before touching GOAT at all — see the
+    // matching comment in functions/api/data.js's onRequestGet. This is
+    // the endpoint that benefits most: a cache miss here is ~90-120 GOAT
+    // API calls, so actually caching the result (instead of only setting a
+    // Cache-Control header the browser saw but Cloudflare's own edge never
+    // acted on) is most of the "why is this slow / why does it sometimes
+    // error" fix. Deliberately inside this try/catch, not before it — a
+    // Cache API failure must fall back to a live pull, not crash the whole
+    // request.
+    const cached = await cache.match(CACHE_KEY);
+    if (cached) return cached;
+
+    const result = await loadAppointments(env);
+    // Only a successful pull is worth caching; a transient failure should
+    // let the very next request try again rather than serving (or
+    // extending) an error for a full 2 minutes.
+    const response = json(result.body, result.status, result.status === 200 ? 120 : undefined);
+    if (result.status === 200) {
+      // A cache.put failure must not fail the response itself — see the
+      // matching comment in functions/api/data.js.
+      try {
+        ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
+      } catch (cacheErr) {
+        // ignore — see comment above
+      }
+    }
+    return response;
+  } catch (err) {
+    return json({ error: 'Failed to load appointment outcomes', detail: String((err && err.message) || err) }, 502);
   }
-  return { startDate, endDate, mode, counts, rates, reps };
 }
