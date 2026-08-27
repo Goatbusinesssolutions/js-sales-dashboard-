@@ -109,11 +109,25 @@ async function loadAppointments(env) {
     // in GOAT shows up within a couple of client polls (see
     // REFRESH_INTERVAL_MS in index.html), long enough that this expensive
     // pull doesn't re-run on literally every poll from every open tab.
-    const [opportunities, events, taggedContacts] = await Promise.all([
-      fetchAllOpportunities(locationId, apiKey),
-      fetchCalendarEvents(locationId, apiKey, calendarId, startMs, endMs),
-      fetchTaggedContacts(locationId, apiKey, NI_NQ_TAG_NAMES),
-    ]);
+    //
+    // Fetched ONE AT A TIME, not via Promise.all. This used to run all
+    // three pulls concurrently — each one already paces its OWN internal
+    // pagination (see PAGE_GAP_MS in lib/ghlClient.js), but running three
+    // separately-paced loops at the same time still adds their request
+    // rates together against GOAT's one shared per-location rate limit,
+    // which is exactly the kind of burst that was tripping the 429 even
+    // after every earlier fix to the pacing *within* a single loop. This
+    // is slower wall-clock (a cold cache miss here can now take up to a
+    // minute or so) but that time is pure network/await time, not CPU
+    // time Cloudflare bills or limits — and it's the only way to actually
+    // keep this endpoint's own total request rate to GOAT bounded, rather
+    // than tripling it right when the very first call of each loop goes
+    // out. A real visitor almost never pays this cost directly, since the
+    // cron warmer (see worker/index.js) does it in the background ahead of
+    // time in the overwhelming majority of cases.
+    const opportunities = await fetchAllOpportunities(locationId, apiKey);
+    const events = await fetchCalendarEvents(locationId, apiKey, calendarId, startMs, endMs);
+    const taggedContacts = await fetchTaggedContacts(locationId, apiKey, NI_NQ_TAG_NAMES);
 
     const classified = classifyEvents(events, opportunities, taggedContacts, { calendarId, todayStr });
     const daily = rollupByDay(classified);
