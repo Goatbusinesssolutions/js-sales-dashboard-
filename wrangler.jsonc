@@ -41,11 +41,22 @@
   // Keeps the edge cache warm on Cloudflare's own clock (see
   // worker/index.js's `scheduled` handler) instead of relying on a visitor
   // to trigger the live, slow (and occasionally flaky) pull from GOAT.
-  // "* * * * *" (every minute) re-warms /api/data; "*/2 * * * *" (every 2
-  // minutes) re-warms the much heavier /api/appointments pull — each
-  // matched to that endpoint's own cache window.
+  // Deliberately offset onto alternating minutes rather than both
+  // matching "every minute"/"every 2 minutes" literally — the old
+  // "* * * * *" / "*/2 * * * *" pair both land on every even minute (0, 2,
+  // 4, ...), so /api/data's ~15-20 GOAT calls and /api/appointments' much
+  // heavier ~90-120 calls fired at GOAT at the exact same moment every 2
+  // minutes. That combined burst was enough to trip GOAT's rate limit
+  // (429s on /opportunities/search) even with retries. "*/2 * * * *"
+  // (even minutes) re-warms /api/data; "1-59/2 * * * *" (odd minutes)
+  // re-warms /api/appointments — same 2-minute cadence each, but never on
+  // the same tick. Each matched to that endpoint's own cache window (see
+  // the s-maxage values in functions/api/data.js and
+  // functions/api/appointments.js) and to the literal string match in
+  // worker/index.js's scheduled() — changing either side without the
+  // other means a cron tick warms nothing.
   "triggers": {
-    "crons": ["* * * * *", "*/2 * * * *"]
+    "crons": ["*/2 * * * *", "1-59/2 * * * *"]
   },
 
   // Everything under public/ is served as a static file automatically
