@@ -2140,8 +2140,23 @@
   document.getElementById('apptCustomEnd').addEventListener('change', renderAppointments);
   document.getElementById('apptRefreshBtn').addEventListener('click', () => fetchAppointments(true));
 
-  fetchAppointments();
-  setInterval(fetchAppointments, REFRESH_INTERVAL_MS);
+  // Deliberately offset a few seconds from the sales-dashboard fetch above
+  // (which fires immediately at page load, then every REFRESH_INTERVAL_MS)
+  // instead of also firing immediately here. Both used to start at the
+  // exact same instant on every single page load AND every subsequent
+  // auto-refresh tick, forever, for as long as a tab (e.g. an office TV)
+  // stayed open — on the rare occasion either endpoint's edge cache was
+  // cold at that moment, that meant two independent live pulls hitting
+  // GOAT's API at once, which is exactly the kind of collision that was
+  // tripping its rate limit even after the pulls themselves were paced
+  // internally. A short, fixed offset (not a full half-cycle delay) keeps
+  // the section loading almost as fast as before while still removing the
+  // guaranteed simultaneity.
+  const APPT_FETCH_OFFSET_MS = 4000;
+  setTimeout(() => {
+    fetchAppointments();
+    setInterval(fetchAppointments, REFRESH_INTERVAL_MS);
+  }, APPT_FETCH_OFFSET_MS);
 </script>
 
 </body>
