@@ -35,18 +35,22 @@ export default {
   // handler) that just satisfies each handler's expected {request, env,
   // ctx} shape.
   //
-  // Two separate cron schedules, matched to each endpoint's own cache
-  // window, so the cheaper /api/data pull (~15-20 GOAT calls) re-warms
-  // every minute while the much heavier /api/appointments pull (~90-120
-  // GOAT calls) only re-warms every 2 minutes instead of doubling that
-  // cost for no benefit.
+  // Two separate cron schedules, both every 2 minutes but deliberately on
+  // ALTERNATING minutes (see wrangler.jsonc's triggers.crons comment) —
+  // the old every-1-minute / every-2-minutes pair both landed on every
+  // even minute, so /api/data's ~15-20 GOAT calls and /api/appointments'
+  // ~90-120 GOAT calls fired at GOAT simultaneously, which was enough
+  // combined burst to trip GOAT's own rate limit. Matching this file's
+  // string comparisons to wrangler.jsonc's cron expressions is required —
+  // if the two ever drift apart, a tick fires without a matching branch
+  // here and silently warms nothing.
   async scheduled(event, env, ctx) {
     const fakeRequest = (path) => new Request(`https://internal-warm.example/${path}`);
     const tasks = [];
-    if (event.cron === '* * * * *') {
+    if (event.cron === '*/2 * * * *') {
       tasks.push(handleData({ request: fakeRequest('api/data'), env, ctx }));
     }
-    if (event.cron === '*/2 * * * *') {
+    if (event.cron === '1-59/2 * * * *') {
       tasks.push(handleAppointments({ request: fakeRequest('api/appointments'), env, ctx }));
     }
     // Swallow errors here — a failed warm attempt just means the cache
