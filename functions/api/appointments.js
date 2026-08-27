@@ -46,11 +46,17 @@ function todayStrInTZ(tz) {
 // already-resolved apiKey/locationId strings, since GHL_API_KEY is now a
 // Secrets Store binding (an object with .get()), not a plain string.
 function missingEnvDetail(apiKey, locationId) {
-  const missing = [];
-  if (!apiKey) missing.push('GHL_API_KEY');
-  if (!locationId) missing.push('GHL_LOCATION_ID');
+  // The `error` string here is what actually reaches the browser (see
+  // index.html's fetchAppointments, which only ever displays body.error) —
+  // so it must stay GOAT-branded, not name the underlying env vars. The
+  // `debug` object below is server-side diagnostic detail only (never
+  // rendered in the UI), so it's fine for it to use the real Cloudflare
+  // binding names for whoever's actually troubleshooting the config.
+  const missingLabels = [];
+  if (!apiKey) missingLabels.push('API key');
+  if (!locationId) missingLabels.push('location ID');
   return {
-    error: `Missing ${missing.join(' and ')}. GHL_API_KEY lives in Cloudflare Secrets Store (check wrangler.jsonc's secrets_store_secrets binding and that the secret's status is Active, not Pending); GHL_LOCATION_ID lives in wrangler.jsonc's vars block.`,
+    error: `Can't connect to GOAT right now — missing ${missingLabels.join(' and ')} in the server configuration. This needs to be fixed in the Cloudflare setup, not in GOAT itself — contact whoever manages the dashboard.`,
     debug: {
       GHL_API_KEY: apiKey
         ? `present, length ${apiKey.length}${apiKey.trim() !== apiKey ? ' — HAS LEADING/TRAILING WHITESPACE, re-paste it' : ''}`
