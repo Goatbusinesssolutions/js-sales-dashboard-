@@ -104,11 +104,8 @@ async function loadAppointments(env) {
     // subrequests, and a cache miss here already exceeds that on its own —
     // this endpoint requires Workers Paid ($5/mo, 1000-subrequest cap)
     // regardless of cache duration. If you ever need to cut the per-pull
-    // cost instead, lower APPOINTMENTS_HISTORY_DAYS. The 2-minute cache
-    // below is a deliberate tradeoff — short enough that a status change
-    // in GOAT shows up within a couple of client polls (see
-    // REFRESH_INTERVAL_MS in index.html), long enough that this expensive
-    // pull doesn't re-run on literally every poll from every open tab.
+    // cost instead, lower APPOINTMENTS_HISTORY_DAYS. See the cache-lifetime
+    // comment in onRequestGet below for the current cache window.
     //
     // Fetched ONE AT A TIME, not via Promise.all. This used to run all
     // three pulls concurrently — each one already paces its OWN internal
@@ -231,10 +228,22 @@ export async function onRequestGet(context) {
     if (cached) return cached;
 
     const result = await loadAppointments(env);
-    // Only a successful pull is worth caching; a transient failure should
-    // let the very next request try again rather than serving (or
-    // extending) an error for a full 2 minutes.
-    const response = json(result.body, result.status, result.status === 200 ? 120 : undefined);
+    // Raised from 120s to 180s. The cron warmer re-pulls this endpoint
+    // every 2 minutes (120s) on ODD minutes (see wrangler.jsonc +
+    // worker/index.js). A cache lifetime equal to that cadence left almost
+    // no margin for a late or occasionally-failed warm tick — and because
+    // a cold pull HERE specifically can take up to a minute (see the
+    // "fetched ONE AT A TIME" comment above), a real visitor landing in
+    // that gap was the single biggest source of "it loads slow": not a
+    // broken state, just bad luck on timing. 180s gives a full extra warm
+    // cycle of buffer (60s) past the 120s cadence, so one late/failed tick
+    // no longer means a visitor pays for a live pull. Tradeoff: a status
+    // change in GOAT can take up to 180s to show up instead of 120s —
+    // worth it for making the slow cold path rare instead of routine. Only
+    // a successful pull is worth caching; a transient failure should let
+    // the very next request try again rather than serving (or extending)
+    // an error for a full 3 minutes.
+    const response = json(result.body, result.status, result.status === 200 ? 180 : undefined);
     if (result.status === 200) {
       // A cache.put failure must not fail the response itself — see the
       // matching comment in functions/api/data.js.
