@@ -10,7 +10,81 @@
 import { fetchAllWonOpportunities, getUserName } from '../../lib/ghlClient.js';
 import { computeDashboard } from '../../lib/aggregate.js';
 
-const DEFAULT_WEEKLY_TARGET = 288000;
+// ---- weekly target change, effective 2026-10-04 ----
+// The business raised its weekly target from $288,000 to $300,000, but
+// specifically asked for this to apply "from this week forward" only —
+// not retroactively. For the WEEKLY figure itself this needs no special
+// handling: aggregate.js's weekly target is only ever compared against the
+// CURRENT week-to-date total (there's no stored history of what the target
+// used to be on a past week), so simply using the new number from here on
+// is already correct — see DEFAULT_WEEKLY_TARGET below.
+//
+// Monthly and yearly targets are different: they're compared against
+// month-to-date / year-to-date totals that span BOTH sides of the change
+// (e.g. October 2026 has a few days before the raise and many after). A
+// flat monthly/yearly figure derived from only the new weekly number would
+// retroactively judge the days before the raise against a target that
+// didn't apply yet. Instead, blendedTarget() below sums (old daily rate ×
+// working days before the cutoff) + (new daily rate × working days from
+// the cutoff onward) for whatever period is being targeted — so the past
+// stays evaluated at the old rate and only the portion from the cutoff
+// forward reflects the raise. This automatically reduces to a plain
+// new-rate target for any period entirely after the cutoff (e.g. all of
+// November 2026 onward, or all of 2027), so this doesn't need to be
+// revisited once the current month/year fully passes the cutoff.
+const TARGET_CUTOFF_DATE = '2026-10-04'; // Sunday starting the week the raise takes effect
+const DEFAULT_PRIOR_WEEKLY_TARGET = 288000; // rate that applied BEFORE the cutoff
+const DEFAULT_WEEKLY_TARGET = 300000; // rate that applies FROM the cutoff forward
+
+// ---- small date helpers, mirroring aggregate.js's own rules exactly ----
+// (Sunday-Saturday week, Monday-Saturday "working days") — duplicated
+// rather than imported because aggregate.js doesn't export its internal
+// date helpers, and this calculation is specific to the target-blending
+// logic above. Keep in sync with aggregate.js if its date rules ever
+// change.
+function todayStrInTZ(tz) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+function addDays(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function isWorkingDay(dateStr) {
+  return new Date(`${dateStr}T00:00:00Z`).getUTCDay() !== 0; // Mon-Sat count, Sunday doesn't
+}
+function countWorkingDays(startStr, endStr) {
+  if (startStr > endStr) return 0;
+  let count = 0;
+  for (let d = startStr; d <= endStr; d = addDays(d, 1)) {
+    if (isWorkingDay(d)) count++;
+  }
+  return count;
+}
+function startOfMonth(dateStr) {
+  return dateStr.slice(0, 7) + '-01';
+}
+function endOfMonth(dateStr) {
+  const [y, m] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+function startOfYear(dateStr) {
+  return dateStr.slice(0, 4) + '-01-01';
+}
+function endOfYear(dateStr) {
+  return dateStr.slice(0, 4) + '-12-31';
+}
+
+// Sums (old daily rate × working days in [periodStart, cutoff)) + (new
+// daily rate × working days in [cutoff, periodEnd]) — see the big comment
+// above for why.
+function blendedTarget(periodStart, periodEnd, oldDailyRate, newDailyRate, cutoff) {
+  const oldPortionEnd = addDays(cutoff, -1);
+  const oldDays = countWorkingDays(periodStart, oldPortionEnd < periodEnd ? oldPortionEnd : periodEnd);
+  const newPortionStart = cutoff > periodStart ? cutoff : periodStart;
+  const newDays = countWorkingDays(newPortionStart, periodEnd);
+  return Math.round(oldDays * oldDailyRate + newDays * newDailyRate);
+}
 
 // A fixed, made-up URL used only as a lookup key for Cloudflare's edge
 // Cache API (caches.default) — deliberately NOT the real request URL, so
@@ -70,13 +144,30 @@ async function loadDashboard(env) {
     return { status: 500, body: missingEnvDetail(apiKey, locationId) };
   }
 
+  const tz = env.DASHBOARD_TZ || 'America/New_York';
+  const today = todayStrInTZ(tz);
+
+  // weeklyTarget: no blending needed — see the big comment above. This is
+  // always just "the current rate," since the weekly tile only ever shows
+  // the current week-to-date.
   const weeklyTarget = Number(env.WEEKLY_TARGET) || DEFAULT_WEEKLY_TARGET;
-  const monthlyTarget = Number(env.MONTHLY_TARGET) || Math.round((weeklyTarget * 52) / 12);
-  const yearlyTarget = Number(env.YEARLY_TARGET) || weeklyTarget * 52;
+
+  // monthlyTarget / yearlyTarget: blended across the cutoff — see
+  // blendedTarget()'s comment above. An explicit MONTHLY_TARGET/
+  // YEARLY_TARGET env var still wins outright if ever set, same as before.
+  const priorWeeklyTarget = Number(env.WEEKLY_TARGET_PRIOR) || DEFAULT_PRIOR_WEEKLY_TARGET;
+  const oldDailyRate = priorWeeklyTarget / 6;
+  const newDailyRate = weeklyTarget / 6;
+  const monthlyTarget =
+    Number(env.MONTHLY_TARGET) ||
+    blendedTarget(startOfMonth(today), endOfMonth(today), oldDailyRate, newDailyRate, TARGET_CUTOFF_DATE);
+  const yearlyTarget =
+    Number(env.YEARLY_TARGET) ||
+    blendedTarget(startOfYear(today), endOfYear(today), oldDailyRate, newDailyRate, TARGET_CUTOFF_DATE);
 
   const opportunities = await fetchAllWonOpportunities(locationId, apiKey);
   const dashboard = await computeDashboard(opportunities, {
-    tz: env.DASHBOARD_TZ || 'America/New_York',
+    tz,
     weeklyTarget,
     monthlyTarget,
     yearlyTarget,
@@ -111,22 +202,24 @@ export async function onRequestGet(context) {
     if (cached) return cached;
 
     const result = await loadDashboard(env);
-    // Raised from 60s to 120s to match the cron warmer's new every-2-minutes
-    // cadence (see wrangler.jsonc's triggers.crons + worker/index.js's
-    // scheduled() — this pull and the much heavier /api/appointments pull
-    // used to both land on the same every-2-minutes tick, since the old
-    // every-1-minute schedule here necessarily overlapped it; that combined
-    // burst was enough to trip GOAT's own rate limit (a 429 even the
-    // retry logic in lib/ghlClient.js couldn't fully absorb). Offsetting
-    // the two crons onto alternating minutes fixes the collision, but only
-    // if this cache lives exactly as long as the gap between this
-    // endpoint's own warms — hence 120s, not 60s. A status change in GOAT
-    // now takes up to 2 minutes to show up instead of 1; that's the
-    // deliberate trade for not periodically failing to load at all. Only a
-    // successful pull is worth caching; a transient failure should let the
-    // very next request try again rather than serving (or extending) an
-    // error for the full window.
-    const response = json(result.body, result.status, result.status === 200 ? 120 : undefined);
+    // Raised from 120s to 150s. The cron warmer re-pulls this endpoint
+    // every 2 minutes (120s) on EVEN minutes (see wrangler.jsonc +
+    // worker/index.js), so a cache lifetime of exactly 120s left almost no
+    // margin: if that warm tick landed even a few seconds late (Cloudflare
+    // cron timing isn't to-the-second, and a transient GOAT hiccup can
+    // delay or skip a tick entirely), the cache had ALREADY expired by the
+    // time the next real visitor arrived, so they paid for a live,
+    // synchronous pull themselves instead of getting the pre-warmed
+    // response — this is what "it loads slow" turned out to mean in
+    // practice. 150s gives a ~30s buffer past the 120s warm cadence, so an
+    // occasionally-late or occasionally-skipped tick no longer means a real
+    // visitor hits a cold pull. The tradeoff: a status change in GOAT can
+    // now take up to 150s to show up instead of 120s — worth it for not
+    // periodically making someone wait on a live pull. Only a successful
+    // pull is worth caching; a transient failure should let the very next
+    // request try again rather than serving (or extending) an error for
+    // the full window.
+    const response = json(result.body, result.status, result.status === 200 ? 150 : undefined);
     if (result.status === 200) {
       // A cache.put failure must not fail the response itself — the
       // visitor already has their (freshly computed, correct) data;
