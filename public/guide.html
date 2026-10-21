@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How This Dashboard Works — JS Construction</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --surface-page:   #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-accent:  #2a78d6;
+    --series-track:   #cde2fb;
+    --critical-text:  #d03b3b;
+    --card-shadow:    0 1px 2px rgba(11,11,11,0.04), 0 8px 24px rgba(11,11,11,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --surface-page:   #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-accent:  #3987e5;
+      --series-track:   rgba(57,135,229,0.22);
+      --critical-text:  #e66767;
+      --card-shadow:    0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --surface-page:   #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-accent:  #3987e5;
+    --series-track:   rgba(57,135,229,0.22);
+    --critical-text:  #e66767;
+    --card-shadow:    0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--surface-page);
+  }
+  body { min-height: 100vh; display: flex; justify-content: center; padding: 40px 20px; }
+  .dash { width: 100%; max-width: 760px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow);
+    padding: 30px 32px 36px;
+  }
+  .top-nav { font-size: 13px; margin-bottom: 18px; }
+  .top-nav a { color: var(--series-accent); text-decoration: none; font-weight: 600; }
+  .top-nav a:hover { text-decoration: underline; }
+  h1 { font-size: 24px; font-weight: 750; color: var(--text-primary); letter-spacing: -0.01em; margin: 0 0 4px; }
+  .sub { font-size: 13.5px; color: var(--text-muted); margin-bottom: 30px; }
+  h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted); margin: 36px 0 14px; padding-top: 22px; border-top: 1px solid var(--gridline);
+  }
+  h2:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+  h3 { font-size: 15.5px; font-weight: 700; color: var(--text-primary); margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.65; color: var(--text-secondary); margin: 0 0 12px; }
+  strong { color: var(--text-primary); font-weight: 650; }
+  code {
+    background: var(--surface-page); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-size: 12.5px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text-primary);
+  }
+  .def-list { margin: 14px 0; }
+  .def-row { padding: 12px 0; border-bottom: 1px solid var(--gridline); display: grid; grid-template-columns: 150px 1fr; gap: 16px; }
+  .def-row:last-child { border-bottom: none; }
+  .def-term { font-size: 13.5px; font-weight: 700; color: var(--text-primary); }
+  .def-term .dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 8px; vertical-align: middle; }
+  .def-desc { font-size: 13.5px; line-height: 1.6; color: var(--text-secondary); }
+  @media (max-width: 560px) { .def-row { grid-template-columns: 1fr; gap: 4px; } }
+  .tag-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 16px; }
+  .tag-pill {
+    font-size: 11.5px; font-weight: 600; background: var(--surface-page); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 11px; color: var(--text-secondary); font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .callout {
+    background: var(--surface-page); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); margin: 14px 0;
+  }
+  .callout.warn { background: rgba(208,59,59,0.08); color: var(--text-primary); }
+  .callout strong { color: var(--text-primary); }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+  th { text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); padding: 8px 10px; border-bottom: 1px solid var(--gridline); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--gridline); color: var(--text-secondary); vertical-align: top; }
+  td:first-child, th:first-child { font-weight: 650; color: var(--text-primary); white-space: nowrap; }
+  .footer-link { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--gridline); font-size: 12.5px; color: var(--text-muted); }
+  .footer-link a { color: var(--series-accent); text-decoration: none; font-weight: 600; }
+  .footer-link a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="viz-root dash">
+  <div class="card">
+    <div class="top-nav"><a href="/">&larr; Back to dashboard</a></div>
+    <h1>How This Dashboard Works</h1>
+    <div class="sub">Sales totals, pacing, targets, and appointment resulting &amp; tags — in plain language.</div>
+
+    <h2>Sales totals</h2>
+    <p>Every dollar figure on the main dashboard is a <strong>won</strong> opportunity in GOAT, across every pipeline, counted by its <strong>Won Date</strong> — not when the estimate was given, not when the deal was created.</p>
+    <p>Won Date is read from the moment GOAT automatically flips an opportunity's status to "won" (an instant, automatic event the moment a contract is signed — no rep, no manual entry, no lag), converted into a calendar date in the business's own timezone so a contract signed at 9:56pm ET isn't misfiled onto the next day. A separate, manually-maintained "Won Date" custom field is used only as a fallback for the rare record missing that automatic timestamp.</p>
+    <p>A <strong>week</strong> runs Sunday through Saturday. A <strong>working day</strong> (used only for pacing math below, never for the dollar totals themselves) is Monday through Saturday — a sale that closes on a Sunday still counts in every dollar total, it just isn't counted in the day denominator.</p>
+
+    <h2>Pacing &amp; projections</h2>
+    <p>The <strong>projected total</strong> shown for a month or year is a straight-line run-rate: average $ per working day &times; working days in the period. That average is deliberately computed <strong>through yesterday only</strong> — today is still in progress, so treating its partial revenue as a full day's would understate the pace and make things look worse than they are. It is a projection, not a target.</p>
+    <p>The <strong>behind pace / on pace</strong> callouts and the "$X,XXX/working day" catch-up figure answer a different question: what's needed for the <em>rest</em> of the period to still land on target by period end — not a flat average spread over the whole period.</p>
+
+    <h2>Targets</h2>
+    <p>The current weekly sales target is <strong>$300,000</strong>, effective the week of <strong>October 4, 2026</strong> forward (it was $288,000 before that — see the <a href="/changelog.html">changelog</a>).</p>
+    <p>Monthly and yearly targets are <strong>blended</strong> across that cutover: working days before Oct 4 are still measured against the old $288k/week rate, working days from Oct 4 onward against the new $300k/week rate, and the two are summed. That keeps a month or year that straddles the raise from being retroactively judged against a number that wasn't the goal yet for its earlier days.</p>
+
+    <h2>Appointment outcomes — how "resulting" works</h2>
+    <p>Every booked Estimate Calendar appointment that has already happened gets sorted into exactly one outcome bucket, per rules confirmed with the business:</p>
+
+    <div class="def-list">
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#0ca30c;"></span>Sold</div>
+        <div class="def-desc">The linked deal's status is <strong>won</strong>. The appointment itself is tagged Sold on the calendar, but the dollar figure attached to it is always sourced by Won Date — the same basis as the sales totals above — so the two never disagree for the same date range.</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#2a78d6;"></span>DNS</div>
+        <div class="def-desc">"Did Not Sell (yet)" — an estimate was given, no decision yet. The linked deal is <strong>open</strong> and sitting in one of three stages: Rep Working, Rehash (Leads pipeline), or Estimate Sent (Leads Commercial pipeline).</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#898781;"></span>No Show</div>
+        <div class="def-desc">The calendar marks the appointment <code>noshow</code>. Folds in "One Leg" too — GOAT doesn't track that as a separate status, and both mean the same thing for counting purposes (doesn't count as an opportunity).</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#eda100;"></span>Inc. Time</div>
+        <div class="def-desc">"Inconvenient Time" — the calendar marks it <code>invalid</code> <strong>and</strong> the contact carries an "inc time" tag. The full buying committee was present, but no demo/price was given (someone was tied up, unwell, etc.). Unlike No Show, this <strong>does</strong> count as an opportunity in the rate math below, because a decision-maker was actually in the room. The deal itself stays open and just moves to the Reset stage.</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#d03b3b;"></span>Not Interested (NI)</div>
+        <div class="def-desc">The linked deal's status is <strong>lost</strong> (for appointments on/after Aug 16, 2026) — or, before that date, or when there's no linked deal at all, a "not interested"-family tag on the contact.</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#d03b3b;"></span>Not Qualified (NQ)</div>
+        <div class="def-desc">The linked deal's status is <strong>abandoned</strong> (for appointments on/after Aug 16, 2026) — or, before that date, or when there's no linked deal at all, a "not qualified"-family tag.</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:#c3c2b7;"></span>Unresulted</div>
+        <div class="def-desc">Showed up on the calendar but doesn't fit any bucket above yet. <strong>This is a data-quality flag, not a business outcome</strong> — it almost always means the linked deal is open but parked in a stage that isn't one of the three DNS stages above (commonly <strong>Reset</strong>). The drill-down list on the dashboard names the exact stage and what it needs to move to (Rep Working/Rehash, Won, Lost, or Abandoned), with a link straight to the contact in GOAT to fix it there.</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:var(--gridline);"></span>Excluded</div>
+        <div class="def-desc">Calendar status <code>cancelled</code>, or <code>invalid</code> with none of the Inc. Time / NI / NQ signals above.</div>
+      </div>
+      <div class="def-row">
+        <div class="def-term"><span class="dot" style="background:var(--series-track);"></span>Upcoming</div>
+        <div class="def-desc">Status <code>confirmed</code> or <code>new</code> with a start time still in the future — hasn't happened yet.</div>
+      </div>
+    </div>
+
+    <div class="callout warn">
+      <strong>Seeing an appointment stuck as Unresulted?</strong> Nine times out of ten the fix isn't on the dashboard — it's in GOAT. Open the contact from the drill-down link and move the linked deal out of whatever holding stage it's in (Reset, most often) into Rep Working/Rehash, Won, Lost, or Abandoned. The dashboard re-pulls appointment data every couple of minutes in the background, so the fix shows up here shortly after you make it in GOAT — no need to refresh repeatedly.
+    </div>
+
+    <h3>Tags that drive this</h3>
+    <p>These are matched against a contact's GOAT tags, including known typo/variant spellings seen in this location's tag list:</p>
+    <table>
+      <tr><th>Family</th><th>Tags matched</th></tr>
+      <tr><td>Not Interested</td><td><div class="tag-pills"><span class="tag-pill">not interested</span><span class="tag-pill">no intereest</span><span class="tag-pill">no interest</span><span class="tag-pill">nor interested</span><span class="tag-pill">not intersted</span></div></td></tr>
+      <tr><td>Not Qualified</td><td><div class="tag-pills"><span class="tag-pill">not qualified</span><span class="tag-pill">not qualified credit</span><span class="tag-pill">not qualified does not own</span><span class="tag-pill">not qualified out of area</span><span class="tag-pill">not qualified repair</span><span class="tag-pill">not qualifed</span><span class="tag-pill">not&nbsp;&nbsp;qualified</span></div></td></tr>
+      <tr><td>Inc. Time</td><td><div class="tag-pills"><span class="tag-pill">inc time</span><span class="tag-pill">inc. time</span><span class="tag-pill">inconvenient time</span></div></td></tr>
+    </table>
+
+    <h3>Why dates before Aug 16, 2026 read a little differently</h3>
+    <p>Before <strong>Aug 16, 2026</strong>, the automation that applies NI/NQ tags <strong>deleted</strong> the linked opportunity instead of changing its status — so for appointments before that date, the opportunity-status signal is incomplete, and the dashboard falls back to the tag on the contact instead. Sold, DNS, and No Show are unaffected and fully reliable at any date.</p>
+    <p>Any date range that touches a date before Aug 16, 2026 automatically switches the rate math into <strong>Modified mode</strong> (you'll see a badge on the appointment-outcomes section showing which mode is active), which drops NI/NQ from the formulas entirely rather than report an unreliable number.</p>
+
+    <h3>The three rates</h3>
+    <table>
+      <tr><th>Rate</th><th>Full mode (Aug 16, 2026 onward)</th><th>Modified mode (touches an earlier date)</th></tr>
+      <tr><td>Opportunity rate</td><td>(Sold+DNS+Inc.Time+NI) &divide; all resulted</td><td>not computed</td></tr>
+      <tr><td>Demo-to-opp rate</td><td>(Sold+DNS) &divide; (Sold+DNS+Inc.Time+NI)</td><td>(Sold+DNS) &divide; (Sold+DNS+No&nbsp;Show)</td></tr>
+      <tr><td>Close rate</td><td>Sold &divide; (Sold+DNS)</td><td>Sold &divide; (Sold+DNS) — same formula</td></tr>
+    </table>
+    <p>"Estimates sent" always means Sold+DNS — both mean a price was actually given.</p>
+
+    <h3>Pipeline stage glossary</h3>
+    <p>Stage names you may see in an Unresulted drill-down note:</p>
+    <table>
+      <tr><th>Stage</th><th>What it means here</th></tr>
+      <tr><td>Reset</td><td>Appointment needs to be rebooked / re-attempted — not a finished outcome on its own.</td></tr>
+      <tr><td>Rep Working</td><td>DNS-equivalent — estimate given, rep actively following up.</td></tr>
+      <tr><td>Rehash</td><td>DNS-equivalent (Leads pipeline) — estimate given, being revisited.</td></tr>
+      <tr><td>Estimate Sent</td><td>DNS-equivalent (Leads Commercial pipeline).</td></tr>
+      <tr><td>Insurance Working / Warm Leads / Needs Financing / Appointment Scheduled</td><td>Other open, in-progress stages — not yet a concluding outcome.</td></tr>
+      <tr><td>Closed Canceled</td><td>A closed-out, non-sale stage outside the standard Won/Lost/Abandoned statuses.</td></tr>
+    </table>
+
+    <div class="footer-link">Questions about a specific number? The drill-downs on the dashboard link every figure straight to the appointments/contacts behind it. For what's changed recently and why, see the <a href="/changelog.html">changelog</a>.</div>
+  </div>
+</div>
+</body>
+</html>
