@@ -9,6 +9,7 @@
 
 import { fetchAllWonOpportunities, getUserName } from '../../lib/ghlClient.js';
 import { computeDashboard } from '../../lib/aggregate.js';
+import { kvServe } from '../../lib/kvCache.js';
 
 // ---- weekly target change, effective 2026-10-04 ----
 // The business raised its weekly target from $288,000 to $300,000, but
@@ -86,18 +87,8 @@ function blendedTarget(periodStart, periodEnd, oldDailyRate, newDailyRate, cutof
   return Math.round(oldDays * oldDailyRate + newDays * newDailyRate);
 }
 
-// A fixed, made-up URL used only as a lookup key for Cloudflare's edge
-// Cache API (caches.default) — deliberately NOT the real request URL, so
-// the cached entry doesn't fragment across whatever hostname a request
-// actually arrives on (today's workers.dev domain, a custom domain later,
-// or the synthetic request worker/index.js's cron `scheduled` warmer uses).
-// Every reader and writer of this cache must agree on this exact key.
-const CACHE_KEY = new Request('https://js-dashboard-cache.internal/api/data');
-
-function json(data, status, cacheSeconds) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (cacheSeconds) headers['Cache-Control'] = `public, s-maxage=${cacheSeconds}, stale-while-revalidate=120`;
-  return new Response(JSON.stringify(data), { status, headers });
+function json(data, status) {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
 // Diagnostic-grade version of the missing-env-var check: says exactly which
@@ -130,11 +121,13 @@ function missingEnvDetail(apiKey, locationId) {
 
 // Does the actual GOAT pull + aggregation — no knowledge of caching or HTTP
 // status codes, just "here's what happened." Split out from onRequestGet so
-// the cache-lookup/cache-store wrapper below stays simple, and so
+// the KV-cache wrapper below (see lib/kvCache.js) stays simple, and so
 // worker/index.js's cron `scheduled` warmer (see wrangler.jsonc's
 // triggers.crons) can run the exact same computation a real visitor would,
-// just proactively, ahead of anyone actually asking for it.
-async function loadDashboard(env) {
+// just proactively, ahead of anyone actually asking for it. Exported (not
+// just used locally) so worker/index.js's scheduled handler can call it
+// directly through kvRefresh.
+export async function loadDashboard(env) {
   // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not a
   // plain string — .get() is what actually fetches the secret value.
   const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
@@ -181,57 +174,14 @@ async function loadDashboard(env) {
 
 export async function onRequestGet(context) {
   const { env, ctx } = context;
-  const cache = caches.default;
 
   try {
-    // Edge cache check FIRST, before touching GOAT at all. Cloudflare's own
-    // cache is the actual fix here — the Cache-Control header alone (below)
-    // only ever told the *browser*/downstream CDNs how to treat the
-    // response; it never made Cloudflare itself store it, so every page
-    // load and every 60s auto-refresh was paying for a full live pull from
-    // GOAT. A hit here means either a recent real visitor or
-    // worker/index.js's cron warmer already paid that cost — see
-    // CACHE_KEY's comment for why this ignores the actual incoming request
-    // URL. Deliberately inside this same try/catch as the live pull below
-    // (NOT checked before it) — if the Cache API itself ever errors, this
-    // must fall back to a normal live pull rather than crashing the whole
-    // request with an unhandled exception (which is what a 500 with no
-    // JSON body — instead of this function's own error responses — would
-    // mean).
-    const cached = await cache.match(CACHE_KEY);
-    if (cached) return cached;
-
-    const result = await loadDashboard(env);
-    // Raised from 120s to 150s. The cron warmer re-pulls this endpoint
-    // every 2 minutes (120s) on EVEN minutes (see wrangler.jsonc +
-    // worker/index.js), so a cache lifetime of exactly 120s left almost no
-    // margin: if that warm tick landed even a few seconds late (Cloudflare
-    // cron timing isn't to-the-second, and a transient GOAT hiccup can
-    // delay or skip a tick entirely), the cache had ALREADY expired by the
-    // time the next real visitor arrived, so they paid for a live,
-    // synchronous pull themselves instead of getting the pre-warmed
-    // response — this is what "it loads slow" turned out to mean in
-    // practice. 150s gives a ~30s buffer past the 120s warm cadence, so an
-    // occasionally-late or occasionally-skipped tick no longer means a real
-    // visitor hits a cold pull. The tradeoff: a status change in GOAT can
-    // now take up to 150s to show up instead of 120s — worth it for not
-    // periodically making someone wait on a live pull. Only a successful
-    // pull is worth caching; a transient failure should let the very next
-    // request try again rather than serving (or extending) an error for
-    // the full window.
-    const response = json(result.body, result.status, result.status === 200 ? 150 : undefined);
-    if (result.status === 200) {
-      // A cache.put failure must not fail the response itself — the
-      // visitor already has their (freshly computed, correct) data;
-      // losing the ability to cache it just means the next request pays
-      // for another live pull, same as if caching didn't exist at all.
-      try {
-        ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
-      } catch (cacheErr) {
-        // ignore — see comment above
-      }
-    }
-    return response;
+    // KV-backed precompute, shared across every Cloudflare colo — see
+    // lib/kvCache.js's top comment for why this replaced the earlier
+    // per-colo Cache API approach. kvServe reads the "data" key written by
+    // worker/index.js's cron warmer (or by itself, on a miss), and only
+    // falls through to a live GOAT pull if KV has never been populated.
+    return await kvServe(env, ctx, 'data', loadDashboard);
   } catch (err) {
     return json({ error: 'Failed to load dashboard data', detail: String((err && err.message) || err) }, 502);
   }
