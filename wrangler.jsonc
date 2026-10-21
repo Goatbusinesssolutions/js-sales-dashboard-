@@ -38,7 +38,30 @@
     }
   ],
 
-  // Keeps the edge cache warm on Cloudflare's own clock (see
+  // DASH_CACHE is the Workers KV namespace that backs lib/kvCache.js's
+  // kvServe/kvRefresh. This binding previously existed ONLY as a
+  // dashboard-added KV binding (never committed here) — which hit the
+  // exact same wipe-on-deploy bug called out above for GHL_LOCATION_ID and
+  // GHL_API_KEY: a git-triggered deploy (or a manual `wrangler deploy`)
+  // treats this file as the full source of truth for bindings, so a
+  // binding that only exists in the dashboard gets silently dropped by the
+  // very next deploy, even one that touches nothing related to it. That's
+  // what happened here — a redeploy on 10/21 wiped this binding, which is
+  // why /api/data and /api/appointments suddenly started taking 20-100+
+  // seconds again (no KV cache to read from, so every request fell back to
+  // a live GOAT pull). Committing it here, like the two bindings above,
+  // means every future deploy keeps it instead of silently dropping it.
+  // The id below is this location's existing SALES_DASH_CACHE namespace
+  // (Cloudflare dashboard → Workers & Pages → KV) — reused rather than
+  // recreated, so none of the data already warmed into it is lost.
+  "kv_namespaces": [
+    {
+      "binding": "DASH_CACHE",
+      "id": "746f41da7d844e9ea748e6b2def63a2a"
+    }
+  ],
+
+  // Keeps the KV cache warm on Cloudflare's own clock (see
   // worker/index.js's `scheduled` handler) instead of relying on a visitor
   // to trigger the live, slow (and occasionally flaky) pull from GOAT.
   // Deliberately offset onto alternating minutes rather than both
@@ -50,9 +73,7 @@
   // (429s on /opportunities/search) even with retries. "*/2 * * * *"
   // (even minutes) re-warms /api/data; "1-59/2 * * * *" (odd minutes)
   // re-warms /api/appointments — same 2-minute cadence each, but never on
-  // the same tick. Each matched to that endpoint's own cache window (see
-  // the s-maxage values in functions/api/data.js and
-  // functions/api/appointments.js) and to the literal string match in
+  // the same tick. Each matched to the literal string match in
   // worker/index.js's scheduled() — changing either side without the
   // other means a cron tick warms nothing.
   "triggers": {
