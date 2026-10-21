@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Changelog — JS Construction Dashboard</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --surface-page:   #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-accent:  #2a78d6;
+    --series-track:   #cde2fb;
+    --critical-text:  #d03b3b;
+    --card-shadow:    0 1px 2px rgba(11,11,11,0.04), 0 8px 24px rgba(11,11,11,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --surface-page:   #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-accent:  #3987e5;
+      --series-track:   rgba(57,135,229,0.22);
+      --critical-text:  #e66767;
+      --card-shadow:    0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --surface-page:   #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-accent:  #3987e5;
+    --series-track:   rgba(57,135,229,0.22);
+    --critical-text:  #e66767;
+    --card-shadow:    0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--surface-page);
+  }
+  body { min-height: 100vh; display: flex; justify-content: center; padding: 40px 20px; }
+  .dash { width: 100%; max-width: 760px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow);
+    padding: 30px 32px 36px;
+  }
+  .top-nav { font-size: 13px; margin-bottom: 18px; }
+  .top-nav a { color: var(--series-accent); text-decoration: none; font-weight: 600; }
+  .top-nav a:hover { text-decoration: underline; }
+  h1 { font-size: 24px; font-weight: 750; color: var(--text-primary); letter-spacing: -0.01em; margin: 0 0 4px; }
+  .sub { font-size: 13.5px; color: var(--text-muted); margin-bottom: 30px; }
+  p { font-size: 14px; line-height: 1.65; color: var(--text-secondary); margin: 0 0 10px; }
+  strong { color: var(--text-primary); font-weight: 650; }
+
+  .entry { padding: 22px 0; border-top: 1px solid var(--gridline); }
+  .entry:first-of-type { border-top: none; padding-top: 0; }
+  .entry-date { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--series-accent); margin-bottom: 4px; }
+  .entry-title { font-size: 16.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 14px; }
+  .entry-block { margin-bottom: 12px; }
+  .entry-block:last-child { margin-bottom: 0; }
+  .entry-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+  .entry-text { font-size: 13.5px; line-height: 1.6; color: var(--text-secondary); }
+
+  .footer-note { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--gridline); font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .footer-note a { color: var(--series-accent); text-decoration: none; font-weight: 600; }
+  .footer-note a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="viz-root dash">
+  <div class="card">
+    <div class="top-nav"><a href="/">&larr; Back to dashboard</a></div>
+    <h1>Changelog</h1>
+    <div class="sub">What's changed on this dashboard, and why — newest first.</div>
+
+    <div class="entry">
+      <div class="entry-date">October 5, 2026</div>
+      <div class="entry-title">Appointment outcomes section still loading slow</div>
+      <div class="entry-block">
+        <div class="entry-label">The problem</div>
+        <div class="entry-text">The appointment-outcomes section's edge cache lasted exactly 120 seconds — the same length as the automatic background refresh that keeps it pre-warmed. Any refresh that landed even a few seconds late, or occasionally failed, meant the cache had already gone cold by the time a real visitor showed up, and they paid for a live pull from GOAT themselves — which, for this section specifically, can take up to about a minute.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">What we changed</div>
+        <div class="entry-text">Widened the cache window from 120 seconds to 180 seconds — a full extra refresh cycle of buffer past the 2-minute warm-up schedule.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">Why it matters</div>
+        <div class="entry-text">A late or occasionally-skipped background refresh no longer means a visitor hits the slow live-pull path. Trade-off: a status change made in GOAT can now take up to 180 seconds to show up here instead of 120 — worth it for making the slow path rare instead of routine.</div>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div class="entry-date">October 5, 2026</div>
+      <div class="entry-title">Weekly sales target raised to $300,000</div>
+      <div class="entry-block">
+        <div class="entry-label">The problem</div>
+        <div class="entry-text">The business raised its weekly sales target from $288,000 to $300,000, effective the week of October 4, 2026 — but the dashboard's monthly and yearly targets are derived from the weekly number, and a flat change would have retroactively judged September and early-October days against a target that didn't exist yet when those days happened.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">What we changed</div>
+        <div class="entry-text">The weekly target now shows $300,000. Monthly and yearly targets are "blended" across the October 4 cutover: working days before that date are still measured against the old $288,000/week rate, working days from that date forward are measured against the new $300,000/week rate, and the two are summed for whatever period is being shown.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">Why it matters</div>
+        <div class="entry-text">Progress bars and pacing stay fair across the change — nobody is measured against a goal that wasn't the goal yet when they were hitting the numbers that count toward it. This also means no further changes are needed once October and 2026 fully pass the cutover; the math naturally reduces to a flat $300,000/week target from November 2026 onward.</div>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div class="entry-date">October 5, 2026</div>
+      <div class="entry-title">Main dashboard loading slow</div>
+      <div class="entry-block">
+        <div class="entry-label">The problem</div>
+        <div class="entry-text">Same root cause as the appointment-outcomes fix above, but for the main sales dashboard's data: a 120-second cache window exactly matching the 2-minute background refresh cycle left no margin for a late or skipped tick.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">What we changed</div>
+        <div class="entry-text">Widened the cache window from 120 seconds to 150 seconds.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">Why it matters</div>
+        <div class="entry-text">Far fewer live, multi-second pulls for a real visitor — most page loads now come straight from an already-warm cache.</div>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div class="entry-date">August 27, 2026</div>
+      <div class="entry-title">Appointment outcomes erroring out / rate-limited</div>
+      <div class="entry-block">
+        <div class="entry-label">The problem</div>
+        <div class="entry-text">The appointment-outcomes endpoint pulls three separate, heavy paginated data sets from GOAT: every opportunity, every tagged contact, and every calendar event in range. Running those three pulls at the same time — even though each one paced its own requests internally — added their request rates together and tripped GOAT's shared rate limit for this account, causing errors.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">What we changed</div>
+        <div class="entry-text">The three pulls now run one after another instead of all at once. The two background cache-warming schedules (one for the main dashboard, one for appointment outcomes) were also moved onto alternating minutes instead of both firing on the same minute, so they stop colliding with each other too.</div>
+      </div>
+      <div class="entry-block">
+        <div class="entry-label">Why it matters</div>
+        <div class="entry-text">No more rate-limit errors on this section. Trade-off: a cold pull (cache completely empty) now takes up to about a minute end-to-end instead of a few seconds — but a real visitor almost never pays that cost directly, since the background refresh keeps the cache warm ahead of time in the overwhelming majority of cases.</div>
+      </div>
+    </div>
+
+    <div class="footer-note">This log covers the changes that affect what you see or how numbers are calculated — not every small code or styling commit. For how the dashboard calculates and classifies things day to day, see <a href="/guide.html">How This Dashboard Works</a>.</div>
+  </div>
+</div>
+</body>
+</html>
