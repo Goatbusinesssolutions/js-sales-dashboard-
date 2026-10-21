@@ -3,13 +3,14 @@
 //
 // Separate from /api/data (the dollar-totals dashboard) on purpose: this
 // endpoint is far more expensive to compute (see the budget note below), so
-// it gets its own, much longer edge cache instead of slowing down or
-// competing with the sales-dashboard pull.
+// it gets its own KV key instead of slowing down or competing with the
+// sales-dashboard pull.
 
 import { fetchAllOpportunities, fetchCalendarEvents, fetchTaggedContacts, getUserName } from '../../lib/ghlClient.js';
 import { classifyEvents, rollupByDay, mergeWonSalesIntoDaily, describeReason, DEFAULT_ESTIMATE_CALENDAR_ID, DEFAULT_FIX_DATE } from '../../lib/appointments.js';
 import { extractWonRecords, rollupSalesDaily } from '../../lib/aggregate.js';
 import { repNames } from '../../lib/reps.js';
+import { kvServe } from '../../lib/kvCache.js';
 
 // Every typo variant seen in this location's tag list for each family (see
 // lib/appointments.js for how these are used: NI/NQ as a fallback when an
@@ -27,15 +28,8 @@ const NI_NQ_TAG_NAMES = [
   'inc time', 'inc. time', 'inconvenient time',
 ];
 
-// A fixed, made-up URL used only as a lookup key for Cloudflare's edge
-// Cache API (caches.default) — see the matching constant + comment in
-// functions/api/data.js for why this ignores the real request URL.
-const CACHE_KEY = new Request('https://js-dashboard-cache.internal/api/appointments');
-
-function json(data, status, cacheSeconds) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (cacheSeconds) headers['Cache-Control'] = `public, s-maxage=${cacheSeconds}, stale-while-revalidate=300`;
-  return new Response(JSON.stringify(data), { status, headers });
+function json(data, status) {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
 function todayStrInTZ(tz) {
@@ -67,12 +61,13 @@ function missingEnvDetail(apiKey, locationId) {
 }
 
 // Does the actual GOAT pull + classification — no knowledge of caching or
-// HTTP status codes. Split out from onRequestGet so the cache-lookup/
-// cache-store wrapper below stays simple, and so worker/index.js's cron
+// HTTP status codes. Split out from onRequestGet so the KV-cache wrapper
+// below (see lib/kvCache.js) stays simple, and so worker/index.js's cron
 // `scheduled` warmer (see wrangler.jsonc's triggers.crons) can run this
 // same expensive computation proactively instead of a visitor ever
-// triggering it live.
-async function loadAppointments(env) {
+// triggering it live. Exported (not just used locally) so worker/index.js's
+// scheduled handler can call it directly through kvRefresh.
+export async function loadAppointments(env) {
     // env.GHL_API_KEY is a Secrets Store binding (see wrangler.jsonc), not
     // a plain string — .get() is what actually fetches the secret value.
     const apiKey = env.GHL_API_KEY ? await env.GHL_API_KEY.get() : undefined;
@@ -98,14 +93,13 @@ async function loadAppointments(env) {
     // classification needs an opportunity's *current* stage), every
     // contact carrying an NI/NQ-family tag, and every event on the
     // Estimate Calendar in the history window. That's roughly 90-120 GHL
-    // API calls per cache miss (vs ~15-20 for /api/data), and it grows
+    // API calls per pull (vs ~15-20 for /api/data), and it grows
     // slowly over time as the location adds more opportunities/contacts.
     // Cloudflare's free Workers plan caps a single request at 50
-    // subrequests, and a cache miss here already exceeds that on its own —
+    // subrequests, and a pull here already exceeds that on its own —
     // this endpoint requires Workers Paid ($5/mo, 1000-subrequest cap)
-    // regardless of cache duration. If you ever need to cut the per-pull
-    // cost instead, lower APPOINTMENTS_HISTORY_DAYS. See the cache-lifetime
-    // comment in onRequestGet below for the current cache window.
+    // regardless of caching. If you ever need to cut the per-pull
+    // cost instead, lower APPOINTMENTS_HISTORY_DAYS.
     //
     // Fetched ONE AT A TIME, not via Promise.all. This used to run all
     // three pulls concurrently — each one already paces its OWN internal
@@ -114,14 +108,14 @@ async function loadAppointments(env) {
     // rates together against GOAT's one shared per-location rate limit,
     // which is exactly the kind of burst that was tripping the 429 even
     // after every earlier fix to the pacing *within* a single loop. This
-    // is slower wall-clock (a cold cache miss here can now take up to a
-    // minute or so) but that time is pure network/await time, not CPU
-    // time Cloudflare bills or limits — and it's the only way to actually
-    // keep this endpoint's own total request rate to GOAT bounded, rather
-    // than tripling it right when the very first call of each loop goes
-    // out. A real visitor almost never pays this cost directly, since the
-    // cron warmer (see worker/index.js) does it in the background ahead of
-    // time in the overwhelming majority of cases.
+    // is slower wall-clock (a pull here can take up to a minute or so) but
+    // that time is pure network/await time, not CPU time Cloudflare bills
+    // or limits — and it's the only way to actually keep this endpoint's
+    // own total request rate to GOAT bounded, rather than tripling it
+    // right when the very first call of each loop goes out. A real visitor
+    // almost never pays this cost directly, since the cron warmer (see
+    // worker/index.js) does it in the background ahead of time via
+    // kvRefresh in the overwhelming majority of cases.
     const opportunities = await fetchAllOpportunities(locationId, apiKey);
     const events = await fetchCalendarEvents(locationId, apiKey, calendarId, startMs, endMs);
     const taggedContacts = await fetchTaggedContacts(locationId, apiKey, NI_NQ_TAG_NAMES);
@@ -212,48 +206,19 @@ async function loadAppointments(env) {
 
 export async function onRequestGet(context) {
   const { env, ctx } = context;
-  const cache = caches.default;
 
   try {
-    // Edge cache check FIRST, before touching GOAT at all — see the
-    // matching comment in functions/api/data.js's onRequestGet. This is
-    // the endpoint that benefits most: a cache miss here is ~90-120 GOAT
-    // API calls, so actually caching the result (instead of only setting a
-    // Cache-Control header the browser saw but Cloudflare's own edge never
-    // acted on) is most of the "why is this slow / why does it sometimes
-    // error" fix. Deliberately inside this try/catch, not before it — a
-    // Cache API failure must fall back to a live pull, not crash the whole
-    // request.
-    const cached = await cache.match(CACHE_KEY);
-    if (cached) return cached;
-
-    const result = await loadAppointments(env);
-    // Raised from 120s to 180s. The cron warmer re-pulls this endpoint
-    // every 2 minutes (120s) on ODD minutes (see wrangler.jsonc +
-    // worker/index.js). A cache lifetime equal to that cadence left almost
-    // no margin for a late or occasionally-failed warm tick — and because
-    // a cold pull HERE specifically can take up to a minute (see the
-    // "fetched ONE AT A TIME" comment above), a real visitor landing in
-    // that gap was the single biggest source of "it loads slow": not a
-    // broken state, just bad luck on timing. 180s gives a full extra warm
-    // cycle of buffer (60s) past the 120s cadence, so one late/failed tick
-    // no longer means a visitor pays for a live pull. Tradeoff: a status
-    // change in GOAT can take up to 180s to show up instead of 120s —
-    // worth it for making the slow cold path rare instead of routine. Only
-    // a successful pull is worth caching; a transient failure should let
-    // the very next request try again rather than serving (or extending)
-    // an error for a full 3 minutes.
-    const response = json(result.body, result.status, result.status === 200 ? 180 : undefined);
-    if (result.status === 200) {
-      // A cache.put failure must not fail the response itself — see the
-      // matching comment in functions/api/data.js.
-      try {
-        ctx.waitUntil(cache.put(CACHE_KEY, response.clone()));
-      } catch (cacheErr) {
-        // ignore — see comment above
-      }
-    }
-    return response;
+    // KV-backed precompute, shared across every Cloudflare colo — see
+    // lib/kvCache.js's top comment for why this replaced the earlier
+    // per-colo Cache API approach. This is the endpoint that benefits most:
+    // a cold pull here is ~90-120 GOAT API calls, so actually serving a
+    // precomputed value from KV (instead of only setting a Cache-Control
+    // header the browser saw but each colo's own cache may not have had
+    // yet) is most of the "why is this slow / why does it sometimes error"
+    // fix. kvServe reads the "appointments" key written by
+    // worker/index.js's cron warmer (or by itself, on a miss), and only
+    // falls through to a live GOAT pull if KV has never been populated.
+    return await kvServe(env, ctx, 'appointments', loadAppointments);
   } catch (err) {
     return json({ error: 'Failed to load appointment outcomes', detail: String((err && err.message) || err) }, 502);
   }
