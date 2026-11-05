@@ -610,6 +610,51 @@
       <div class="compare-footnote-row" id="compareFootnote">—</div>
     </div>
 
+    <div class="compare-section" id="netSalesSection">
+      <div class="section-label">Net sales — bonus-qualifying (this month)</div>
+      <div class="compare-row">
+        <div class="compare-block">
+          <div class="kpi-label">Gross — all won sales</div>
+          <div class="kpi-value" id="grossMtdValue">—</div>
+          <div class="kpi-count" id="grossMtdCount">—</div>
+        </div>
+        <div class="compare-arrow-block"><span class="arrow">−</span></div>
+        <div class="compare-block">
+          <div class="kpi-label">Held back — issues / canceled / credit reject</div>
+          <div class="kpi-value" id="heldBackMtdValue">—</div>
+          <div class="kpi-count" id="heldBackMtdCount">—</div>
+        </div>
+        <div class="compare-arrow-block"><span class="arrow">=</span></div>
+        <div class="compare-block">
+          <div class="kpi-label" style="color:var(--series-accent);">Net — bonus-qualifying</div>
+          <div class="kpi-value" id="netMtdValue">—</div>
+          <div class="kpi-count" id="netMtdCount">—</div>
+          <div class="kpi-avg" id="netMtdAvg">—</div>
+        </div>
+      </div>
+      <div class="compare-footnote-row" id="netSalesFootnote">—</div>
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <button class="hist-back-btn" id="heldBackToggleBtn">View held-back deals</button>
+        <button class="hist-back-btn" id="resolvedToggleBtn">View deals resolved since…</button>
+      </div>
+      <div id="heldBackPanel" style="display:none;margin-top:14px;">
+        <div class="lb-head" style="margin-bottom:8px;">
+          <div class="section-label" style="margin-bottom:0;">Currently held back — this month</div>
+        </div>
+        <div id="heldBackList"></div>
+      </div>
+      <div id="resolvedPanel" style="display:none;margin-top:14px;">
+        <div class="lb-head" style="margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+          <div class="section-label" style="margin-bottom:0;">Resolved since</div>
+          <span style="display:flex;align-items:center;gap:6px;">
+            <input type="date" class="appt-select" id="resolvedSinceDate">
+          </span>
+        </div>
+        <div class="footnote" style="margin-top:0;margin-bottom:10px;">Deals that were held back and have since moved to a normal stage — a true-up list for a bonus run after the one where these were originally excluded. Pick the date you last ran bonuses to see just what's changed since.</div>
+        <div id="resolvedList"></div>
+      </div>
+    </div>
+
     <div class="chart-section">
       <div class="section-label" id="chartLabel">Daily sales</div>
       <svg id="barChart" width="704" height="200" viewBox="0 0 704 200"></svg>
@@ -1054,6 +1099,117 @@
       `Full last month (${fmtRange(data.fullLastMonth.start, data.fullLastMonth.end)}): <strong>${fmtMoney(data.fullLastMonth.value)}</strong> across <strong>${data.fullLastMonth.count} deals</strong> — for reference against this month's projected total below.${avgPctText}`;
   }
 
+  // ---- Net Sales (bonus-qualifying) ----
+  // Gross (data.mtd, rendered by renderCompare above) counts every won deal.
+  // Net (data.netSales.mtd) excludes deals currently sitting in a held-back
+  // stage — Sales Issues, Closed Canceled, or Closed Credit Reject (see
+  // aggregate.js's HELD_BACK_STAGE_IDS). "Held back" here is just the
+  // difference between the two, not a separate query — it's always exactly
+  // Gross minus Net because both are summed over the identical date window.
+  //
+  // The held-back/resolved panels below are closed by default and only
+  // populated when first opened or when already open and the data
+  // refreshes — same toggle-on-demand pattern as the appointment-outcomes
+  // drilldown panel further down the page, just simpler (no per-bucket
+  // state machine needed for two independent panels).
+  function salesContactUrl(data, contactId) {
+    if (!contactId || !data.locationId) return null;
+    return `https://app.goatbusinesssolutions.com/v2/location/${data.locationId}/contacts/detail/${contactId}`;
+  }
+
+  function renderNetSales(data) {
+    const gross = data.mtd;
+    const net = data.netSales.mtd;
+    const heldBackValue = Math.round((gross.value - net.value) * 100) / 100;
+    const heldBackCount = gross.count - net.count;
+
+    document.getElementById('grossMtdValue').textContent = fmtMoney(gross.value);
+    document.getElementById('grossMtdCount').textContent = `${gross.count} deal${gross.count === 1 ? '' : 's'}`;
+    document.getElementById('heldBackMtdValue').textContent = fmtMoney(heldBackValue);
+    document.getElementById('heldBackMtdCount').textContent = `${heldBackCount} deal${heldBackCount === 1 ? '' : 's'}`;
+    document.getElementById('netMtdValue').textContent = fmtMoney(net.value);
+    document.getElementById('netMtdCount').textContent = `${net.count} deal${net.count === 1 ? '' : 's'}`;
+    document.getElementById('netMtdAvg').textContent = `Avg deal: ${fmtMoney(net.avgDeal)}`;
+
+    const netLastMonth = data.netSales.fullLastMonth;
+    document.getElementById('netSalesFootnote').innerHTML =
+      `Full last month (${fmtRange(netLastMonth.start, netLastMonth.end)}): Net <strong>${fmtMoney(netLastMonth.value)}</strong> across <strong>${netLastMonth.count} deals</strong>, vs. Gross <strong>${fmtMoney(data.fullLastMonth.value)}</strong> across <strong>${data.fullLastMonth.count} deals</strong>. A deal that's held back when its month closes isn't lost from Net — the moment it moves off Sales Issues/Closed Canceled/Closed Credit Reject, it's automatically counted in its ORIGINAL sale month's Net total from then on. Use "deals resolved since…" below to find exactly which ones to true up on a bonus run after the fact.`;
+
+    // Default the "resolved since" date to the start of this month, the
+    // first time it's shown — a reasonable guess at "since my last bonus
+    // run" that the user can change to any actual cutoff date.
+    const sinceInput = document.getElementById('resolvedSinceDate');
+    if (!sinceInput.value) sinceInput.value = data.mtd.start;
+
+    renderHeldBackList(data);
+    renderResolvedList(data);
+  }
+
+  function renderHeldBackList(data) {
+    const listEl = document.getElementById('heldBackList');
+    const rows = (data.heldBack.list || [])
+      .filter((r) => r.wonDate >= data.mtd.start && r.wonDate <= data.mtd.end)
+      .sort((a, b) => (a.wonDate < b.wonDate ? 1 : a.wonDate > b.wonDate ? -1 : 0));
+    listEl.innerHTML = '';
+    if (!rows.length) {
+      listEl.innerHTML = '<div class="lb-empty">Nothing currently held back this month.</div>';
+      return;
+    }
+    rows.forEach((r) => {
+      const repName = (data.reps && data.reps[r.assignedTo]) || r.assignedTo || 'Unassigned';
+      const link = salesContactUrl(data, r.contactId);
+      const row = document.createElement('div');
+      row.className = 'unres-row';
+      row.innerHTML = `
+        <div class="unres-date">${r.wonDate} · <span class="unres-rep">${repName}</span> · ${fmtMoney(r.monetaryValue)}</div>
+        <div class="unres-title">${r.name || 'Untitled deal'}</div>
+        <div class="unres-reason">Held back — ${r.stageName}</div>
+        ${link ? `<a class="unres-link" href="${link}" target="_blank" rel="noopener">Open contact in GOAT →</a>` : ''}`;
+      listEl.appendChild(row);
+    });
+  }
+
+  function renderResolvedList(data) {
+    const listEl = document.getElementById('resolvedList');
+    const since = document.getElementById('resolvedSinceDate').value; // 'YYYY-MM-DD' or ''
+    const rows = (data.resolvedRecently || [])
+      .filter((r) => !since || r.resolvedAt.slice(0, 10) >= since)
+      .sort((a, b) => (a.resolvedAt < b.resolvedAt ? 1 : a.resolvedAt > b.resolvedAt ? -1 : 0));
+    listEl.innerHTML = '';
+    if (!rows.length) {
+      listEl.innerHTML = `<div class="lb-empty">${since ? 'Nothing resolved since that date.' : "Nothing's resolved out of a held-back stage yet — this fills in as deals move off Sales Issues/Closed Canceled/Closed Credit Reject."}</div>`;
+      return;
+    }
+    rows.forEach((r) => {
+      const repName = (data.reps && data.reps[r.assignedTo]) || r.assignedTo || 'Unassigned';
+      const link = salesContactUrl(data, r.contactId);
+      const row = document.createElement('div');
+      row.className = 'unres-row';
+      row.innerHTML = `
+        <div class="unres-date">Won ${r.wonDate} · <span class="unres-rep">${repName}</span> · ${fmtMoney(r.monetaryValue)}</div>
+        <div class="unres-title">${r.name || 'Untitled deal'}</div>
+        <div class="unres-reason">Was held back (${r.wasStage}) — resolved ${r.resolvedAt.slice(0, 10)}</div>
+        ${link ? `<a class="unres-link" href="${link}" target="_blank" rel="noopener">Open contact in GOAT →</a>` : ''}`;
+      listEl.appendChild(row);
+    });
+  }
+
+  function toggleNetSalesPanel(panelId, btnId, openLabel, closeLabel) {
+    const panel = document.getElementById(panelId);
+    const willShow = panel.style.display === 'none';
+    panel.style.display = willShow ? 'block' : 'none';
+    document.getElementById(btnId).textContent = willShow ? closeLabel : openLabel;
+  }
+  document.getElementById('heldBackToggleBtn').addEventListener('click', () => {
+    toggleNetSalesPanel('heldBackPanel', 'heldBackToggleBtn', 'View held-back deals', 'Hide held-back deals');
+  });
+  document.getElementById('resolvedToggleBtn').addEventListener('click', () => {
+    toggleNetSalesPanel('resolvedPanel', 'resolvedToggleBtn', 'View deals resolved since…', 'Hide resolved deals');
+  });
+  document.getElementById('resolvedSinceDate').addEventListener('change', () => {
+    if (latestData) renderResolvedList(latestData);
+  });
+
   function renderChart(data) {
     const svg = document.getElementById('barChart');
     const tooltip = document.getElementById('tooltip');
@@ -1330,6 +1486,7 @@
     renderTargets(data);
     renderKPIs(data);
     renderCompare(data);
+    renderNetSales(data);
     renderChart(data);
     renderMonthlyChart(data);
     renderPacing(data);
