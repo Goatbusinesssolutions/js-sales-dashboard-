@@ -10,7 +10,6 @@
 import { fetchAllWonOpportunities, getUserName } from '../../lib/ghlClient.js';
 import { computeDashboard } from '../../lib/aggregate.js';
 import { kvServe } from '../../lib/kvCache.js';
-import { trackHeldBack } from '../../lib/heldBackTracking.js';
 
 // ---- weekly target change, effective 2026-10-04 ----
 // The business raised its weekly target from $288,000 to $300,000, but
@@ -170,18 +169,10 @@ export async function loadDashboard(env) {
     getUserName,
   });
 
-  // So index.html's Net Sales section can deep-link a held-back/resolved
-  // deal straight to its GOAT contact record, the same way the
-  // appointment-outcomes section already does (see appointments.js's own
+  // So index.html's appointment-outcomes section can deep-link a sold deal
+  // straight to its GOAT contact record (see appointments.js's own
   // `locationId` in its response, and index.html's goatContactUrl).
   dashboard.locationId = locationId;
-
-  // Diff this pull's held-back set against the previous one and attach
-  // whatever resolved since then — see lib/heldBackTracking.js's top
-  // comment. Awaited (not ctx.waitUntil'd) because this result is part of
-  // what gets cached to KV below — "resolvedRecently" needs to be in the
-  // cached payload itself, not computed after the fact on every read.
-  dashboard.resolvedRecently = await trackHeldBack(env, dashboard.heldBack.list);
 
   return { status: 200, body: dashboard };
 }
