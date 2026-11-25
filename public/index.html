@@ -881,6 +881,11 @@
   const histReachedState = {};
 
   function fmtMoney(v) { return '$' + Math.round(v).toLocaleString(); }
+  // Like fmtMoney, but prefixes a minus sign for a positive "amount taken
+  // away" value (e.g. fallout $ being backed out of sold $) — skips the
+  // sign entirely at $0 so a rep/period with no fallout reads as "$0", not
+  // the confusing "-$0".
+  function fmtMoneyOut(v) { return v > 0 ? '-' + fmtMoney(v) : fmtMoney(v); }
   function fmtMoneyAbs(v) { return '$' + Math.round(Math.abs(v)).toLocaleString(); }
   function fmtPct(v, digits = 1) { return (v == null ? '—' : Math.abs(v).toFixed(digits) + '%'); }
 
@@ -2333,7 +2338,7 @@
         tile.classList.add('totals-tile');
         tile.innerHTML = `
           <div class="totals-row"><span class="totals-label">Sold</span><span class="totals-value">${fmtMoney(s.totals.sold)}</span></div>
-          <div class="totals-row"><span class="totals-label">Fallout</span><span class="totals-value negative">-${fmtMoney(s.totals.fallout)}</span></div>
+          <div class="totals-row"><span class="totals-label">Fallout</span><span class="totals-value${s.totals.fallout > 0 ? ' negative' : ''}">${fmtMoneyOut(s.totals.fallout)}</span></div>
           <div class="totals-row net"><span class="totals-label">Net sales</span><span class="totals-value">${fmtMoney(s.totals.net)}</span></div>`;
         row.appendChild(tile);
         return;
@@ -2467,7 +2472,7 @@
           <div class="appt-rep-stat"><b>${r.canceledCount}</b> canceled</div>
           <div class="appt-rep-stat"><b>${r.creditRejectCount}</b> credit reject</div>
           <div class="appt-rep-stat"><b>${fmtMoney(r.soldValue)}</b> sold</div>
-          <div class="appt-rep-stat"><b class="rep-stat-negative">-${fmtMoney(r.falloutValue)}</b> fallout</div>
+          <div class="appt-rep-stat"><b${r.falloutValue > 0 ? ' class="rep-stat-negative"' : ''}>${fmtMoneyOut(r.falloutValue)}</b> fallout</div>
           <div class="appt-rep-stat"><b class="rep-stat-positive">${fmtMoney(r.soldValue - r.falloutValue)}</b> net sales</div>
         </div>`;
       repRowsEl.appendChild(row);
