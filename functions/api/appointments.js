@@ -9,6 +9,7 @@
 import { fetchAllOpportunities, fetchCalendarEvents, fetchTaggedContacts, getUserName } from '../../lib/ghlClient.js';
 import { classifyEvents, rollupByDay, mergeWonSalesIntoDaily, describeReason, DEFAULT_ESTIMATE_CALENDAR_ID, DEFAULT_FIX_DATE } from '../../lib/appointments.js';
 import { extractWonRecords, rollupSalesDaily } from '../../lib/aggregate.js';
+import { extractFalloutRecords } from '../../lib/fallout.js';
 import { repNames } from '../../lib/reps.js';
 import { kvServe } from '../../lib/kvCache.js';
 
@@ -131,6 +132,13 @@ export async function loadAppointments(env) {
     const wonRecords = extractWonRecords(opportunities, { tz });
     mergeWonSalesIntoDaily(daily, rollupSalesDaily(wonRecords));
 
+    // Fallout (sold, then canceled or credit-rejected) — sourced from the
+    // same already-fetched `opportunities` pull above, so this is free, no
+    // extra GHL calls. See lib/fallout.js for why each record's cohort
+    // date (wonDate, possibly null) has to be derived carefully rather
+    // than reusing lastStatusChangeAt the way extractWonRecords does.
+    const falloutRecords = extractFalloutRecords(opportunities, { tz });
+
     // Drill-down lists — a bucket count alone doesn't tell anyone WHICH
     // appointment/contact it's made of. Every bucket except Sold gets one
     // row per classified calendar appointment, newest first (most
@@ -159,6 +167,7 @@ export async function loadAppointments(env) {
     // attached to.
     const sold = wonRecords
       .map((r) => ({
+        id: r.id,
         date: r.wonDate,
         title: r.name,
         contactId: r.contactId,
@@ -175,6 +184,7 @@ export async function loadAppointments(env) {
     }
     for (const r of outcomeEvents) repIds.add(r.assignedUserId);
     for (const r of sold) repIds.add(r.assignedUserId);
+    for (const r of falloutRecords) repIds.add(r.assignedTo || 'unassigned');
     const names = { ...repNames };
     await Promise.all([...repIds].map(async (id) => {
       if (id === 'unassigned' || names[id]) return;
@@ -199,6 +209,21 @@ export async function loadAppointments(env) {
         // range — see goatContactUrl/openDrilldown in index.html.
         events: outcomeEvents,
         sold,
+        // Fallout (sold, then canceled/credit-rejected) drill-down + cohort
+        // data. `date` is the deal's ORIGINAL Won Date (for cohort
+        // bucketing by when it was sold, not when it fell out) — null when
+        // that can't be recovered at all (see lib/fallout.js); the client
+        // reports those separately as "cohort unknown" rather than
+        // dropping or mis-dating them.
+        fallout: falloutRecords.map((r) => ({
+          id: r.id,
+          date: r.wonDate,
+          title: r.name,
+          contactId: r.contactId,
+          assignedUserId: r.assignedTo || 'unassigned',
+          value: r.monetaryValue,
+          reason: r.reason,
+        })),
         reps: names,
       },
     };
