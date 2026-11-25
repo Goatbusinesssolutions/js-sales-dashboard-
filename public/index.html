@@ -412,6 +412,7 @@
   .appt-summary-label { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 7px; }
   .appt-summary-value { font-size: 22px; font-weight: 750; color: var(--text-primary); letter-spacing: -0.01em; }
   .appt-summary-pct { font-size: 10.5px; color: var(--series-accent); font-weight: 700; margin-top: 4px; line-height: 1.35; }
+  .appt-summary-sub { font-size: 10.5px; color: var(--text-muted); font-weight: 600; margin-top: 2px; }
   .appt-summary-hint { font-size: 9px; color: var(--text-muted); margin-top: 5px; }
   @media (max-width: 640px) { .appt-summary-row { grid-template-columns: repeat(2, 1fr); } }
 
@@ -770,7 +771,7 @@
       </div>
 
       <div class="appt-summary-row" id="apptSummaryRow"></div>
-      <div class="footnote" style="margin-top:10px;">Click any number above — or in the detailed breakdown below — to see exactly which appointments/contacts it's made of, each linking straight to the contact in GOAT. On the books = every resulted outcome plus Not yet resulted (Unresulted + Upcoming), for this range.</div>
+      <div class="footnote" style="margin-top:10px;">Click any number above — or in the detailed breakdown below — to see exactly which appointments/contacts it's made of, each linking straight to the contact in GOAT. Appointments ran (resulted or not) = every appointment already on the calendar as of yesterday, whether or not it's been resulted yet — excludes anything scheduled for today or later, for this range.</div>
 
       <div class="appt-counts-row" id="apptCountsRow"></div>
       <div class="appt-rates-row" id="apptRatesRow"></div>
@@ -792,6 +793,54 @@
         <div id="apptRepRows"></div>
         <div class="footnote">$ sold = total value of that rep's won deals by Won Date (see the note above the counts) — attributed to the opportunity's own owner, not necessarily whoever ran the original estimate appointment; usually the same person, occasionally not. Appointments = every resulted appointment for that rep (Sold + DNS + No Show + Inc. Time + Not Interested + Not Qualified) — the same total the counts row above sums to; excludes Unresulted, cancelled, and upcoming appointments. Estimates sent = Sold + DNS (both mean a price was actually given). Close rate = Sold ÷ Estimates sent in both modes, so it always divides out exactly. Demo rate (Estimates sent ÷ Opportunities) also counts Inc. Time and Not Interested as opportunities in Full mode, per the training manual, so it won't divide out from the appointments/estimates counts shown here quite as cleanly.</div>
       </div>
+    </div>
+
+    <div class="appt-section" id="falloutSection">
+      <div class="appt-head">
+        <div class="section-label" style="margin-bottom:0;">Fallout after sold</div>
+        <div class="appt-range-picker">
+          <select class="appt-select" id="falloutRangeSelect">
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="thisWeek">This week</option>
+            <option value="lastWeek">Last week</option>
+            <option value="mtd" selected>Month to date</option>
+            <option value="lastMonth">Last month</option>
+            <option value="ytd">Year to date</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          <span class="appt-custom-dates" id="falloutCustomDates">
+            <input type="date" class="appt-select" id="falloutCustomStart">
+            <span style="color:var(--text-muted);font-size:12px;">to</span>
+            <input type="date" class="appt-select" id="falloutCustomEnd">
+          </span>
+        </div>
+      </div>
+      <div class="appt-range-label">
+        <span id="falloutRangeLabel">—</span>
+      </div>
+
+      <div class="footnote" style="margin-top:4px;">Fallout = a deal that was sold (won), then later canceled or credit-rejected after signing — moved to Closed Canceled or Closed Credit Reject. Rate here is a <u>Won Date cohort</u>: of the deals sold in this range, what % have since fallen out, no matter when the cancellation/credit-reject itself happened (so very recent periods will look better than they truly are until enough time passes for their fallout to catch up). Click any number below to see exactly which deals it's made of, each linking straight to the contact in GOAT.</div>
+
+      <div class="appt-summary-row" id="falloutSummaryRow"></div>
+
+      <div id="falloutDrilldownPanel" style="display:none;margin-top:14px;">
+        <div class="lb-head" style="margin-bottom:8px;">
+          <div class="section-label" style="margin-bottom:0;" id="falloutDrilldownTitle">—</div>
+          <button class="hist-back-btn" id="falloutDrilldownClose">Close</button>
+        </div>
+        <div id="falloutDrilldownList"></div>
+      </div>
+
+      <div style="margin-top:20px;">
+        <div class="lb-head" style="margin-bottom:10px;">
+          <div class="section-label" style="margin-bottom:0;">Rep breakdown — this period</div>
+        </div>
+        <div id="falloutRepRows"></div>
+        <div class="footnote">Sold = deals won (by Won Date) in this range, whether or not they've since fallen out — attributed to the opportunity's own owner (assignedTo). Fallout = how many of those same deals are now sitting in Closed Canceled or Closed Credit Reject, split out below. Fallout rate = Fallout ÷ Sold, by count; the $ under each tile above is the same split by dollar value.</div>
+      </div>
+
+      <div class="footnote" id="falloutUnknownNote" style="margin-top:10px;"></div>
     </div>
 
   </div>
@@ -1758,7 +1807,7 @@
 
   // ---- appointment outcomes section ----
 
-  let apptData = null; // { asOf, tz, fixDate, calendarId, locationId, historyStart, daily, events, sold, reps }
+  let apptData = null; // { asOf, tz, fixDate, calendarId, locationId, historyStart, daily, events, sold, fallout, reps }
 
   function todayStrInTZ(tz) {
     return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -1791,15 +1840,26 @@
     }
   }
 
-  function currentApptRange() {
-    const sel = document.getElementById('apptRangeSelect').value;
+  // Generalized so the fallout-after-sold section below (its own picker,
+  // different element ids, same preset semantics) can reuse this instead
+  // of duplicating the date math. currentApptRange is kept as a thin
+  // wrapper so every existing call site is untouched. Named pickerRange
+  // (not currentPeriodRange) to avoid colliding with the main dashboard's
+  // own currentPeriodRange() (no args) further up, for its "Viewing"
+  // historical picker — a different picker with different semantics.
+  function pickerRange(selectId, startId, endId) {
+    const sel = document.getElementById(selectId).value;
     if (sel === 'custom') {
-      const s = document.getElementById('apptCustomStart').value;
-      const e = document.getElementById('apptCustomEnd').value;
+      const s = document.getElementById(startId).value;
+      const e = document.getElementById(endId).value;
       if (!s || !e || s > e) return null;
       return [s, e];
     }
     return apptPresetRange(sel);
+  }
+
+  function currentApptRange() {
+    return pickerRange('apptRangeSelect', 'apptCustomStart', 'apptCustomEnd');
   }
 
   const APPT_BUCKET_LABELS = { Sold: 'Sold', DNS: 'DNS', NoShow: 'No Show', IncTime: 'Inc. Time', NI: 'Not Interested', NQ: 'Not Qualified', Unresulted: 'Unresulted' };
@@ -1826,7 +1886,18 @@
     badge.textContent = mode === 'full' ? 'Full mode' : 'Modified mode (pre-fix data)';
     badge.className = 'appt-mode-badge ' + mode;
 
-    renderSummaryRow(buildSummary(counts, mode), start, end);
+    // "Appointments ran" excludes today and anything later, no matter what
+    // end date the picker itself has selected — cap the summed range at
+    // yesterday (in the dashboard's own timezone) before summing just the
+    // buckets that represent something that's actually happened
+    // (APPT_METRIC_BUCKETS.Total, which no longer includes Upcoming).
+    const today = todayStrInTZ((apptData && apptData.tz) || 'America/New_York');
+    const yesterday = addDaysStr(today, -1);
+    const ranEnd = end > yesterday ? yesterday : end;
+    const ranCounts = start > ranEnd ? null : sumRange(apptData.daily, start, ranEnd).counts;
+    const apptsRan = ranCounts ? APPT_METRIC_BUCKETS.Total.reduce((sum, k) => sum + (ranCounts[k] || 0), 0) : 0;
+
+    renderSummaryRow(buildSummary(counts, mode, apptsRan), start, end);
 
     const countsRow = document.getElementById('apptCountsRow');
     countsRow.innerHTML = '';
@@ -1944,11 +2015,16 @@
   // block) so a metric's drill-down list always has exactly as many rows
   // as the count shown next to it.
   const APPT_METRIC_BUCKETS = {
-    // "On the books" = every appointment actually happening in this range —
-    // already resulted, overdue-and-never-marked (Unresulted), or still
-    // ahead on the calendar (Upcoming). Deliberately excludes Excluded
-    // (cancelled/invalid) — a cancelled appointment isn't "out" anymore.
-    Total: ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted', 'Upcoming'],
+    // "Appointments ran" = every appointment that's actually happened as of
+    // yesterday — already resulted, or overdue-and-never-marked
+    // (Unresulted). Deliberately excludes Upcoming (hasn't happened yet at
+    // all) and Excluded (cancelled/invalid) — a cancelled appointment isn't
+    // "out" anymore. The date cap itself (today-and-later never counts, no
+    // matter what end date the picker has selected) is applied where this
+    // list is used — drilldownRecords() below, and the separate `apptsRan`
+    // sum in renderAppointments() — not here; this list only controls
+    // which buckets count, not which dates.
+    Total: ['Sold', 'DNS', 'NoShow', 'IncTime', 'NI', 'NQ', 'Unresulted'],
     Opportunities: ['Sold', 'DNS', 'IncTime', 'NI'],
     Demos: ['Sold', 'DNS'],
     Sales: ['Sold'],
@@ -1960,31 +2036,32 @@
     Unresulted: ['Unresulted', 'Upcoming'],
   };
 
-  // Summary row = On the books / Opportunities / Demos / Sales / Not yet
+  // Summary row = Appointments ran / Opportunities / Demos / Sales / Not yet
   // resulted, per the "How You're Measured" formulas in lib/appointments.js's
-  // computeRates, PLUS Upcoming folded into the first and last tiles (see
-  // APPT_METRIC_BUCKETS above) — Upcoming isn't part of computeRates' rate
-  // math at all, it's purely a scheduling fact layered on top so "On the
-  // books" matches what's literally on the calendar for the range, not just
-  // what's already been resulted.
+  // computeRates. "Appointments ran" (apptsRan) is computed separately in
+  // renderAppointments() rather than from `counts` here, since it needs its
+  // own yesterday-or-earlier date cap that the other tiles don't apply —
+  // those keep using the full selected range as before. "Not yet resulted"
+  // still folds in Upcoming (see APPT_METRIC_BUCKETS above) — Upcoming
+  // isn't part of computeRates' rate math at all, it's purely a scheduling
+  // fact.
   //
   // Opportunities % and Demos % are only meaningful in 'full' mode — same
   // restriction computeRates applies to oppRate/demoToOppRate, for the
   // same reason (NI/NQ counts are unreliable pre-fix-date). Sales' %
   // (closing rate = Sold / estimates sent) uses the same formula in both
   // modes, so it's always shown.
-  function buildSummary(counts, mode) {
+  function buildSummary(counts, mode, apptsRan) {
     const sold = counts.Sold || 0, dns = counts.DNS || 0, noShow = counts.NoShow || 0,
       incTime = counts.IncTime || 0, ni = counts.NI || 0, nq = counts.NQ || 0,
       unresulted = counts.Unresulted || 0, upcoming = counts.Upcoming || 0;
     const resulted = sold + dns + noShow + incTime + ni + nq;
     const notYetResulted = unresulted + upcoming;
-    const onTheBooks = resulted + notYetResulted;
     const estimatesSent = sold + dns;
     const oppPool = sold + dns + incTime + ni;
     const full = mode === 'full';
     return [
-      { key: 'Total', label: 'On the books', value: onTheBooks, pct: null, rateLabel: null },
+      { key: 'Total', label: 'Appointments ran (resulted or not)', value: apptsRan, pct: null, rateLabel: null },
       { key: 'Opportunities', label: 'Opportunities', value: oppPool, pct: full && resulted ? oppPool / resulted : null, rateLabel: 'Opp rate' },
       { key: 'Demos', label: 'Demos', value: estimatesSent, pct: full && oppPool ? estimatesSent / oppPool : null, rateLabel: 'Demo-to-opp rate' },
       { key: 'Sales', label: 'Sales', value: sold, pct: estimatesSent ? sold / estimatesSent : null, rateLabel: 'Close rate' },
@@ -2017,14 +2094,24 @@
   // unions whichever of those its APPT_METRIC_BUCKETS entry names.
   function drilldownRecords(key, start, end) {
     const buckets = new Set(APPT_METRIC_BUCKETS[key] || [key]);
+    // 'Total' (the "Appointments ran" tile) applies the same yesterday-or-
+    // earlier cap here as the headline number does in renderAppointments()
+    // — today and anything later never shows up in its list, no matter
+    // what end date is selected elsewhere on the page.
+    let effectiveEnd = end;
+    if (key === 'Total') {
+      const today = todayStrInTZ((apptData && apptData.tz) || 'America/New_York');
+      const yesterday = addDaysStr(today, -1);
+      effectiveEnd = end > yesterday ? yesterday : end;
+    }
     const out = [];
     if (buckets.has('Sold')) {
       for (const r of (apptData.sold || [])) {
-        if (r.date >= start && r.date <= end) out.push({ ...r, bucket: 'Sold', reason: null });
+        if (r.date >= start && r.date <= effectiveEnd) out.push({ ...r, bucket: 'Sold', reason: null });
       }
     }
     for (const r of (apptData.events || [])) {
-      if (buckets.has(r.bucket) && r.date >= start && r.date <= end) out.push(r);
+      if (buckets.has(r.bucket) && r.date >= start && r.date <= effectiveEnd) out.push(r);
     }
     out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
     return out;
@@ -2119,6 +2206,269 @@
       `· refreshed ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (data may be up to 2 min old)`;
   }
 
+  // ---- Fallout after sold: Won-Date-cohort reporting for deals that were
+  // sold, then later canceled or credit-rejected. Rides on the same
+  // apptData fetch as Appointment Outcomes above (apptData.sold and
+  // apptData.fallout) rather than its own fetch — see lib/fallout.js
+  // (server-side) for how each fallout record's cohort date (`date`,
+  // possibly null = "cohort unknown") is derived, and why it can't just
+  // reuse lastStatusChangeAt the way a normal won deal's date can.
+
+  function falloutCurrentRange() {
+    return pickerRange('falloutRangeSelect', 'falloutCustomStart', 'falloutCustomEnd');
+  }
+
+  function emptyFalloutBucket() {
+    return {
+      soldCount: 0, soldValue: 0,
+      falloutCount: 0, falloutValue: 0,
+      canceledCount: 0, canceledValue: 0,
+      creditRejectCount: 0, creditRejectValue: 0,
+    };
+  }
+  function addFalloutSold(bucket, value) { bucket.soldCount += 1; bucket.soldValue += value; }
+  function addFalloutOut(bucket, reason, value) {
+    bucket.falloutCount += 1; bucket.falloutValue += value;
+    if (reason === 'canceled') { bucket.canceledCount += 1; bucket.canceledValue += value; }
+    else { bucket.creditRejectCount += 1; bucket.creditRejectValue += value; }
+  }
+  function finalizeFalloutBucket(b) {
+    b.falloutRate = b.soldCount ? b.falloutCount / b.soldCount : null;
+    b.falloutValueRate = b.soldValue ? b.falloutValue / b.soldValue : null;
+    return b;
+  }
+
+  // "Sold" (the rate's denominator) unions apptData.sold (every CURRENTLY
+  // won deal) with apptData.fallout (every deal currently sitting in
+  // Closed Canceled/Closed Credit Reject, any status), keyed by opportunity
+  // id. A deal that fell out but was never status-corrected (still shows
+  // status='won' — an older, pre-automation straggler) appears in BOTH
+  // lists with the same id, so it's only counted once on the "sold" side
+  // while still counting as fallout. A deal whose status HAS been
+  // corrected to 'lost' only appears in apptData.fallout (it dropped out
+  // of the won pull entirely) and still needs to count as "sold" once, for
+  // its original Won Date — otherwise a 100%-fallout cohort would wrongly
+  // show as 0 sold / no rate at all instead of a full 100%.
+  function buildFalloutBuckets(start, end) {
+    const team = emptyFalloutBucket();
+    const byRep = {};
+    function repBucket(id) {
+      const key = id || 'unassigned';
+      if (!byRep[key]) byRep[key] = emptyFalloutBucket();
+      return byRep[key];
+    }
+
+    const soldIds = new Set();
+    for (const r of (apptData.sold || [])) {
+      if (!r.date || r.date < start || r.date > end) continue;
+      soldIds.add(r.id);
+      addFalloutSold(team, r.value);
+      addFalloutSold(repBucket(r.assignedUserId), r.value);
+    }
+
+    let unknownCount = 0, unknownValue = 0, unknownCanceled = 0, unknownCreditReject = 0;
+    for (const r of (apptData.fallout || [])) {
+      if (r.date == null) {
+        unknownCount += 1;
+        unknownValue += r.value;
+        if (r.reason === 'canceled') unknownCanceled += 1; else unknownCreditReject += 1;
+        continue;
+      }
+      if (r.date < start || r.date > end) continue;
+      if (!soldIds.has(r.id)) {
+        soldIds.add(r.id);
+        addFalloutSold(team, r.value);
+        addFalloutSold(repBucket(r.assignedUserId), r.value);
+      }
+      addFalloutOut(team, r.reason, r.value);
+      addFalloutOut(repBucket(r.assignedUserId), r.reason, r.value);
+    }
+
+    finalizeFalloutBucket(team);
+    for (const key of Object.keys(byRep)) finalizeFalloutBucket(byRep[key]);
+    return {
+      team, byRep,
+      unknown: { count: unknownCount, value: unknownValue, canceled: unknownCanceled, creditReject: unknownCreditReject },
+    };
+  }
+
+  function buildFalloutSummary(team) {
+    return [
+      { key: 'Sold', label: 'Sold (this cohort)', value: team.soldCount, sub: fmtMoney(team.soldValue), pct: null, rateLabel: null },
+      { key: 'Fallout', label: 'Total fallout', value: team.falloutCount, sub: fmtMoney(team.falloutValue), pct: team.falloutRate, rateLabel: 'Fallout rate' },
+      { key: 'Canceled', label: 'Canceled', value: team.canceledCount, sub: fmtMoney(team.canceledValue), pct: null, rateLabel: null },
+      { key: 'CreditReject', label: 'Credit reject', value: team.creditRejectCount, sub: fmtMoney(team.creditRejectValue), pct: null, rateLabel: null },
+    ];
+  }
+
+  function renderFalloutSummaryRow(summary, start, end) {
+    const row = document.getElementById('falloutSummaryRow');
+    row.innerHTML = '';
+    summary.forEach((s) => {
+      const tile = document.createElement('div');
+      tile.className = 'appt-summary-tile';
+      tile.dataset.key = s.key;
+      tile.innerHTML = `
+        <div class="appt-summary-label">${s.label}</div>
+        <div class="appt-summary-value">${s.value}</div>
+        <div class="appt-summary-sub">${s.sub}</div>
+        ${s.pct != null ? `<div class="appt-summary-pct">${s.rateLabel ? s.rateLabel + ' ' : ''}${apptPct(s.pct)}</div>` : ''}
+        <div class="appt-summary-hint">Click to view list</div>`;
+      tile.addEventListener('click', () => toggleFalloutDrilldown(s.key, s.label, start, end));
+      row.appendChild(tile);
+    });
+  }
+
+  let falloutDrilldownOpenKey = null;
+  let falloutDrilldownOpenLabel = '';
+
+  function closeFalloutDrilldown() {
+    falloutDrilldownOpenKey = null;
+    falloutDrilldownOpenLabel = '';
+    document.getElementById('falloutDrilldownPanel').style.display = 'none';
+    document.getElementById('falloutDrilldownList').innerHTML = '';
+    document.querySelectorAll('#falloutSummaryRow .appt-summary-tile').forEach((t) => t.classList.remove('active'));
+  }
+
+  // Mirrors drilldownRecords() above, scoped to fallout's own two source
+  // lists (apptData.sold / apptData.fallout) instead of apptData.events.
+  function falloutDrilldownRecords(key, start, end) {
+    const out = [];
+    if (key === 'Sold') {
+      for (const r of (apptData.sold || [])) {
+        if (r.date && r.date >= start && r.date <= end) out.push({ ...r, bucket: 'Sold' });
+      }
+      // A deal already corrected to status='lost' isn't in apptData.sold
+      // at all, so pull those in from apptData.fallout too — same union
+      // buildFalloutBuckets does — so this list's count always matches
+      // the Sold tile above it exactly. (A straggler still status='won'
+      // is already covered by the loop above, so skip anything already
+      // seen there.)
+      const seen = new Set((apptData.sold || []).map((r) => r.id));
+      for (const r of (apptData.fallout || [])) {
+        if (r.date && r.date >= start && r.date <= end && !seen.has(r.id)) out.push({ ...r, bucket: 'Sold' });
+      }
+    } else {
+      const wantReason = key === 'Canceled' ? 'canceled' : key === 'CreditReject' ? 'creditReject' : null;
+      for (const r of (apptData.fallout || [])) {
+        if (r.date == null) continue;
+        if (wantReason && r.reason !== wantReason) continue;
+        if (r.date >= start && r.date <= end) out.push({ ...r, bucket: r.reason === 'canceled' ? 'Canceled' : 'Credit reject' });
+      }
+    }
+    out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    return out;
+  }
+
+  function showFalloutDrilldownPanel(key, label, records) {
+    falloutDrilldownOpenKey = key;
+    falloutDrilldownOpenLabel = label;
+    document.querySelectorAll('#falloutSummaryRow .appt-summary-tile').forEach((t) => {
+      t.classList.toggle('active', t.dataset.key === key);
+    });
+    const panel = document.getElementById('falloutDrilldownPanel');
+    const listEl = document.getElementById('falloutDrilldownList');
+    panel.style.display = 'block';
+    document.getElementById('falloutDrilldownTitle').textContent = `${label} (${records.length})`;
+
+    const CAP = 200;
+    listEl.innerHTML = '';
+    if (!records.length) {
+      listEl.innerHTML = '<div class="lb-empty">Nothing in this bucket for the selected range.</div>';
+      return;
+    }
+    records.slice(0, CAP).forEach((r) => {
+      const repName = (apptData.reps && apptData.reps[r.assignedUserId]) || r.assignedUserId;
+      const row = document.createElement('div');
+      row.className = 'unres-row';
+      const link = goatContactUrl(r.contactId);
+      row.innerHTML = `
+        <div class="unres-date">${r.date} · <span class="unres-rep">${repName}</span> · ${fmtMoney(r.value)}</div>
+        <div class="unres-title">${r.title || 'Untitled deal'}</div>
+        ${link ? `<a class="unres-link" href="${link}" target="_blank" rel="noopener">Open contact in GOAT →</a>` : ''}`;
+      listEl.appendChild(row);
+    });
+    if (records.length > CAP) {
+      const note = document.createElement('div');
+      note.className = 'lb-empty';
+      note.textContent = `Showing the most recent ${CAP} of ${records.length} — narrow the date range to see the rest.`;
+      listEl.appendChild(note);
+    }
+  }
+
+  function toggleFalloutDrilldown(key, label, start, end) {
+    if (falloutDrilldownOpenKey === key) { closeFalloutDrilldown(); return; }
+    showFalloutDrilldownPanel(key, label, falloutDrilldownRecords(key, start, end));
+  }
+
+  function refreshOpenFalloutDrilldown(start, end) {
+    if (!falloutDrilldownOpenKey) return;
+    showFalloutDrilldownPanel(falloutDrilldownOpenKey, falloutDrilldownOpenLabel, falloutDrilldownRecords(falloutDrilldownOpenKey, start, end));
+  }
+
+  document.getElementById('falloutDrilldownClose').addEventListener('click', closeFalloutDrilldown);
+
+  function renderFalloutRepRows(byRep) {
+    const repRowsEl = document.getElementById('falloutRepRows');
+    repRowsEl.innerHTML = '';
+    const repList = Object.keys(byRep)
+      .filter((id) => id !== 'unassigned')
+      .map((id) => ({ name: (apptData.reps && apptData.reps[id]) || id, ...byRep[id] }))
+      .filter((r) => r.soldCount > 0)
+      .sort((a, b) => b.falloutValue - a.falloutValue || b.soldValue - a.soldValue);
+
+    if (!repList.length) {
+      repRowsEl.innerHTML = '<div class="lb-empty">No sold deals in this period yet.</div>';
+      return;
+    }
+    const maxValue = Math.max(1, ...repList.map((r) => r.soldValue));
+    repList.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'appt-rep-row';
+      row.innerHTML = `
+        <div class="appt-rep-top">
+          <div class="lb-name" title="${r.name}">${r.name}</div>
+          <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${Math.max((r.soldValue / maxValue) * 100, 1.5)}%"></div></div>
+          <div class="lb-value">${fmtMoney(r.soldValue)}</div>
+        </div>
+        <div class="appt-rep-stats">
+          <div class="appt-rep-stat"><b>${r.soldCount}</b> sold</div>
+          <div class="appt-rep-stat"><b>${r.falloutCount}</b> fallout${r.falloutRate != null ? `<span class="appt-rep-stat-pct">${apptPct(r.falloutRate)}</span>` : ''}</div>
+          <div class="appt-rep-stat"><b>${r.canceledCount}</b> canceled</div>
+          <div class="appt-rep-stat"><b>${r.creditRejectCount}</b> credit reject</div>
+        </div>`;
+      repRowsEl.appendChild(row);
+    });
+  }
+
+  function renderFallout() {
+    if (!apptData) return;
+    document.getElementById('falloutCustomDates').classList.toggle('visible', document.getElementById('falloutRangeSelect').value === 'custom');
+
+    const range = falloutCurrentRange();
+    const rangeLabelEl = document.getElementById('falloutRangeLabel');
+    if (!range) {
+      rangeLabelEl.textContent = 'Pick a start and end date above.';
+      return;
+    }
+    const [start, end] = range;
+    rangeLabelEl.textContent = start === end ? start : `${start} to ${end}`;
+
+    const { team, byRep, unknown } = buildFalloutBuckets(start, end);
+    renderFalloutSummaryRow(buildFalloutSummary(team), start, end);
+    renderFalloutRepRows(byRep);
+    refreshOpenFalloutDrilldown(start, end);
+
+    const unknownEl = document.getElementById('falloutUnknownNote');
+    unknownEl.textContent = unknown.count
+      ? `Plus ${unknown.count} fallout deal${unknown.count === 1 ? '' : 's'} (${fmtMoney(unknown.value)} — ${unknown.canceled} canceled, ${unknown.creditReject} credit reject) with no recoverable original Won Date, all-time — these can't be placed in any cohort above, so they're never counted toward "Sold" or "Fallout rate" for any period.`
+      : '';
+  }
+
+  document.getElementById('falloutRangeSelect').addEventListener('change', renderFallout);
+  document.getElementById('falloutCustomStart').addEventListener('change', renderFallout);
+  document.getElementById('falloutCustomEnd').addEventListener('change', renderFallout);
+
   // isManual = the ⟳ button was clicked (vs. the 60s auto-refresh below) —
   // only the manual click spins the icon, matching the sales-$ dashboard's
   // refreshBtn/fetchAndRender(isManual) pattern above. Re-fetching and
@@ -2136,6 +2486,7 @@
       }
       apptData = await res.json();
       renderAppointments();
+      renderFallout();
       stampApptRefreshNote();
     } catch (err) {
       document.getElementById('apptNote').textContent = `Couldn't load appointment outcomes (${err.message}).`;
