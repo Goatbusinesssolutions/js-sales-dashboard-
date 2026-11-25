@@ -415,6 +415,18 @@
   .appt-summary-sub { font-size: 10.5px; color: var(--text-muted); font-weight: 600; margin-top: 2px; }
   .appt-summary-hint { font-size: 9px; color: var(--text-muted); margin-top: 5px; }
   @media (max-width: 640px) { .appt-summary-row { grid-template-columns: repeat(2, 1fr); } }
+  /* Totals recap tile — used in the Fallout summary row's 5th slot to show
+     Sold / Fallout / Net sales together. Not clickable (no single bucket
+     of records backs "net sales"), so it skips the hover/active/hint
+     styling the other (drillable) tiles use. */
+  .appt-summary-tile.totals-tile { cursor: default; text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 5px; }
+  .appt-summary-tile.totals-tile:hover { background: var(--surface-1); }
+  .totals-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .totals-row .totals-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); }
+  .totals-row .totals-value { font-size: 13.5px; font-weight: 750; color: var(--text-primary); white-space: nowrap; }
+  .totals-row .totals-value.negative { color: var(--critical-text); }
+  .totals-row.net { border-top: 1px solid var(--border); padding-top: 5px; margin-top: 1px; }
+  .totals-row.net .totals-value { color: var(--success-text); }
 
   .appt-counts-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--gridline); margin-top: 14px; border-radius: 10px; overflow: hidden; }
   .appt-count-tile { background: var(--surface-1); padding: 12px 8px; text-align: center; cursor: pointer; transition: background 0.15s; }
@@ -2298,6 +2310,13 @@
       { key: 'Fallout', label: 'Total fallout', value: team.falloutCount, sub: fmtMoney(team.falloutValue), pct: team.falloutRate, rateLabel: 'Fallout rate' },
       { key: 'Canceled', label: 'Canceled', value: team.canceledCount, sub: fmtMoney(team.canceledValue), pct: null, rateLabel: null },
       { key: 'CreditReject', label: 'Credit reject', value: team.creditRejectCount, sub: fmtMoney(team.creditRejectValue), pct: null, rateLabel: null },
+      // Fills the grid's 5th slot (the row is a 5-column grid shared with
+      // the Appointment Outcomes summary row above) with a recap of the
+      // same $ figures already shown in the Sold/Fallout tiles, plus the
+      // one number neither of those states outright: Net sales = Sold $
+      // minus Fallout $, i.e. what's left once this cohort's cancellations
+      // and credit rejects are backed out.
+      { key: 'Totals', totals: { sold: team.soldValue, fallout: team.falloutValue, net: team.soldValue - team.falloutValue } },
     ];
   }
 
@@ -2308,6 +2327,15 @@
       const tile = document.createElement('div');
       tile.className = 'appt-summary-tile';
       tile.dataset.key = s.key;
+      if (s.totals) {
+        tile.classList.add('totals-tile');
+        tile.innerHTML = `
+          <div class="totals-row"><span class="totals-label">Sold</span><span class="totals-value">${fmtMoney(s.totals.sold)}</span></div>
+          <div class="totals-row"><span class="totals-label">Fallout</span><span class="totals-value negative">-${fmtMoney(s.totals.fallout)}</span></div>
+          <div class="totals-row net"><span class="totals-label">Net sales</span><span class="totals-value">${fmtMoney(s.totals.net)}</span></div>`;
+        row.appendChild(tile);
+        return;
+      }
       tile.innerHTML = `
         <div class="appt-summary-label">${s.label}</div>
         <div class="appt-summary-value">${s.value}</div>
