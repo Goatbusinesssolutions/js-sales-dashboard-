@@ -459,6 +459,8 @@
   .appt-rep-stat { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
   .appt-rep-stat b { color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
   .appt-rep-stat .appt-rep-stat-pct { color: var(--series-accent); font-weight: 700; margin-left: 3px; }
+  .appt-rep-stat b.rep-stat-negative { color: var(--critical-text); }
+  .appt-rep-stat b.rep-stat-positive { color: var(--success-text); }
   @media (max-width: 640px) {
     .appt-rep-top { grid-template-columns: minmax(0,110px) 1fr 76px; gap: 8px; }
     .appt-rep-stats { gap: 10px 14px; }
@@ -2464,6 +2466,9 @@
           <div class="appt-rep-stat"><b>${r.falloutCount}</b> fallout${r.falloutRate != null ? `<span class="appt-rep-stat-pct">${apptPct(r.falloutRate)}</span>` : ''}</div>
           <div class="appt-rep-stat"><b>${r.canceledCount}</b> canceled</div>
           <div class="appt-rep-stat"><b>${r.creditRejectCount}</b> credit reject</div>
+          <div class="appt-rep-stat"><b>${fmtMoney(r.soldValue)}</b> sold</div>
+          <div class="appt-rep-stat"><b class="rep-stat-negative">-${fmtMoney(r.falloutValue)}</b> fallout</div>
+          <div class="appt-rep-stat"><b class="rep-stat-positive">${fmtMoney(r.soldValue - r.falloutValue)}</b> net sales</div>
         </div>`;
       repRowsEl.appendChild(row);
     });
